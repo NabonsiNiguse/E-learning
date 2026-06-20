@@ -1,0 +1,27 @@
+=== Existing tables ===
+  attendance_records
+  auth_group
+  auth_group_permissions
+  auth_permission
+  courses
+  django_admin_log
+  django_content_type
+  django_migrations
+  django_session
+  enrollments
+  grade_appeals
+  grade_corrections
+  lessons
+  messages
+  notifications
+  payments
+  progress
+  student_profiles
+  teacher_profiles
+  token_blacklist_blacklistedtoken
+  token_blacklist_outstandingtoken
+  users
+  users_groups
+  users_user_permissions
+
+=== Applied results migrations ===

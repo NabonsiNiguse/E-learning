@@ -1,0 +1,192 @@
+Creating test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...
+Found 64 test(s).
+Operations to perform:
+  Synchronize unmigrated apps: corsheaders, django_filters, messages, rest_framework, rest_framework_simplejwt, staticfiles
+  Apply all migrations: admin, attendance, auth, contenttypes, courses, enrollments, grading, notifications, payments, progress, results, sessions, token_blacklist, users
+Synchronizing apps without migrations:
+  Creating tables...
+    Running deferred SQL...
+Running migrations:
+  Applying contenttypes.0001_initial... OK
+  Applying contenttypes.0002_remove_content_type_name... OK
+  Applying auth.0001_initial... OK
+  Applying auth.0002_alter_permission_name_max_length... OK
+  Applying auth.0003_alter_user_email_max_length... OK
+  Applying auth.0004_alter_user_username_opts... OK
+  Applying auth.0005_alter_user_last_login_null... OK
+  Applying auth.0006_require_contenttypes_0002... OK
+  Applying auth.0007_alter_validators_add_error_messages... OK
+  Applying auth.0008_alter_user_username_max_length... OK
+  Applying auth.0009_alter_user_last_name_max_length... OK
+  Applying auth.0010_alter_group_name_max_length... OK
+  Applying auth.0011_update_proxy_permissions... OK
+  Applying auth.0012_alter_user_first_name_max_length... OK
+  Applying users.0001_initial... OK
+  Applying admin.0001_initial... OK
+  Applying admin.0002_logentry_remove_auto_add... OK
+  Applying admin.0003_logentry_add_action_flag_choices... OK
+  Applying courses.0001_initial... OK
+  Applying courses.0002_initial... OK
+  Applying attendance.0001_initial... OK
+  Applying courses.0003_course_locked... OK
+  Applying courses.0004_add_level... OK
+  Applying enrollments.0001_initial... OK
+  Applying enrollments.0002_initial... OK
+  Applying grading.0001_initial... OK
+  Applying notifications.0001_initial... OK
+  Applying notifications.0002_initial... OK
+  Applying notifications.0003_alter_notification_notification_type_message... OK
+  Applying payments.0001_initial... OK
+  Applying payments.0002_initial... OK
+  Applying progress.0001_initial... OK
+  Applying progress.0002_initial... OK
+  Applying results.0001_initial... OK
+  Applying sessions.0001_initial... OK
+  Applying token_blacklist.0001_initial... OK
+  Applying token_blacklist.0002_outstandingtoken_jti_hex... OK
+  Applying token_blacklist.0003_auto_20171017_2007... OK
+  Applying token_blacklist.0004_auto_20171017_2013... OK
+  Applying token_blacklist.0005_remove_outstandingtoken_jti... OK
+  Applying token_blacklist.0006_auto_20171017_2113... OK
+  Applying token_blacklist.0007_auto_20171017_2214... OK
+  Applying token_blacklist.0008_migrate_to_bigautofield... OK
+  Applying token_blacklist.0010_fix_migrate_to_bigautofield... OK
+  Applying token_blacklist.0011_linearizes_history... OK
+  Applying token_blacklist.0012_alter_outstandingtoken_user... OK
+  Applying token_blacklist.0013_alter_blacklistedtoken_options_and_more... OK
+  Applying users.0002_add_super_admin_role...test_admin_can_override_appeal (results.test_data_integration.GradeAppealAPITests.test_admin_can_override_appeal)
+Admin can override grade via appeal. ... ok
+test_student_can_create_appeal (results.test_data_integration.GradeAppealAPITests.test_student_can_create_appeal)
+Student can create appeal. ... ok
+test_teacher_can_review_appeal (results.test_data_integration.GradeAppealAPITests.test_teacher_can_review_appeal)
+Teacher can review appeal. ... ok
+test_appeal_admin_override (results.test_data_integration.GradeAppealTests.test_appeal_admin_override)
+Admin can override score via appeal. ... ok
+test_appeal_creation (results.test_data_integration.GradeAppealTests.test_appeal_creation)
+Student can create appeal. ... ok
+test_appeal_teacher_review (results.test_data_integration.GradeAppealTests.test_appeal_teacher_review)
+Teacher can review appeal. ... ok
+test_appeal_unique_per_result (results.test_data_integration.GradeAppealTests.test_appeal_unique_per_result)
+Only one appeal per result per student. ... ok
+test_admin_can_create_grading_scale (results.test_data_integration.GradingScaleAPITests.test_admin_can_create_grading_scale)
+Admin can create grading scale. ... ok
+test_teacher_cannot_create_grading_scale (results.test_data_integration.GradingScaleAPITests.test_teacher_cannot_create_grading_scale)
+Teacher cannot create grading scale. ... ok
+test_audit_log_creation (results.test_data_integration.ResultAuditLogTests.test_audit_log_creation)
+Audit log created on result creation. ... ok
+test_audit_log_immutable (results.test_data_integration.ResultAuditLogTests.test_audit_log_immutable)
+Audit log should not be updated. ... ok
+test_audit_log_tracks_changes (results.test_data_integration.ResultAuditLogTests.test_audit_log_tracks_changes)
+Audit log tracks old and new values. ... ok
+test_admin_approve_workflow (results.test_data_integration.ResultsAPITests.test_admin_approve_workflow)
+Admin can approve result. ... ok
+test_admin_can_unlock_result (results.test_data_integration.ResultsAPITests.test_admin_can_unlock_result)
+Admin can unlock locked result. ... ok
+test_admin_sees_all_results (results.test_data_integration.ResultsAPITests.test_admin_sees_all_results)
+Admin can see all results. ... ok
+test_audit_log_endpoint (results.test_data_integration.ResultsAPITests.test_audit_log_endpoint)
+Admin can view audit log. ... ok
+test_locked_result_cannot_be_edited (results.test_data_integration.ResultsAPITests.test_locked_result_cannot_be_edited)
+Locked result cannot be edited by teacher. ... ok
+test_student_cannot_update_result (results.test_data_integration.ResultsAPITests.test_student_cannot_update_result)
+Student cannot update results. ... ok
+test_student_cannot_view_audit_log (results.test_data_integration.ResultsAPITests.test_student_cannot_view_audit_log)
+Student cannot view audit log. ... ok
+test_student_sees_own_results_only (results.test_data_integration.ResultsAPITests.test_student_sees_own_results_only)
+Student can only see own results. ... ok
+test_teacher_can_update_score (results.test_data_integration.ResultsAPITests.test_teacher_can_update_score)
+Teacher can update raw_score. ... ok
+test_teacher_cannot_see_grades (results.test_data_integration.ResultsAPITests.test_teacher_cannot_see_grades)
+Teacher serializer excludes grade fields. ... ok
+test_teacher_cannot_update_status (results.test_data_integration.ResultsAPITests.test_teacher_cannot_update_status)
+Teacher cannot update status. ... ok
+test_teacher_submit_workflow (results.test_data_integration.ResultsAPITests.test_teacher_submit_workflow)
+Teacher can submit result. ... ok
+test_compute_grade_no_active_scale (results.test_data_integration.StudentResultModelTests.test_compute_grade_no_active_scale)
+Grade is None if no active scale. ... ok
+test_compute_grade_no_score (results.test_data_integration.StudentResultModelTests.test_compute_grade_no_score)
+Grade is None if no score. ... ok
+test_compute_grade_with_scale (results.test_data_integration.StudentResultModelTests.test_compute_grade_with_scale)
+Grade computed from active GradingScale. ... ok
+test_is_locked_approved (results.test_data_integration.StudentResultModelTests.test_is_locked_approved)
+Approved status is locked. ... ok
+test_is_locked_draft (results.test_data_integration.StudentResultModelTests.test_is_locked_draft)
+Draft status is not locked. ... ok
+test_is_locked_submitted (results.test_data_integration.StudentResultModelTests.test_is_locked_submitted)
+Submitted status is locked. ... ok
+test_score_validation_negative (results.test_data_integration.StudentResultModelTests.test_score_validation_negative)
+Score cannot be negative. ... ok
+test_score_validation_range (results.test_data_integration.StudentResultModelTests.test_score_validation_range)
+Score must be between 0 and 100. ... ok
+test_score_validation_valid (results.test_data_integration.StudentResultModelTests.test_score_validation_valid)
+Valid scores pass validation. ... ok
+test_unique_constraint (results.test_data_integration.StudentResultModelTests.test_unique_constraint)
+Cannot create duplicate (student, course, year, semester). ... ok
+test_admin_can_approve_result (results.test_integration.ResultsIntegrationTestCase.test_admin_can_approve_result)
+Admin can approve submitted result. ... ok
+test_admin_can_override_grade (results.test_integration.ResultsIntegrationTestCase.test_admin_can_override_grade)
+Admin can override grade via appeal. ... ok
+test_admin_can_unlock_result (results.test_integration.ResultsIntegrationTestCase.test_admin_can_unlock_result)
+Admin can unlock result. ... ok
+test_admin_can_view_all_results (results.test_integration.ResultsIntegrationTestCase.test_admin_can_view_all_results)
+Admin can view all results. ... ok
+test_audit_log_created_on_score_update (results.test_integration.ResultsIntegrationTestCase.test_audit_log_created_on_score_update)
+Audit log created when score updated. ... ok
+test_audit_log_created_on_submit (results.test_integration.ResultsIntegrationTestCase.test_audit_log_created_on_submit)
+Audit log created when result submitted. ... ok
+test_cannot_submit_without_score (results.test_integration.ResultsIntegrationTestCase.test_cannot_submit_without_score)
+Cannot submit result without score. ... ok
+test_grade_computed_from_scale (results.test_integration.ResultsIntegrationTestCase.test_grade_computed_from_scale)
+Grade is computed from GradingScale. ... ok
+test_only_one_active_grading_scale (results.test_integration.ResultsIntegrationTestCase.test_only_one_active_grading_scale)
+Only one active grading scale at a time. ... ok
+test_score_validation_0_to_100 (results.test_integration.ResultsIntegrationTestCase.test_score_validation_0_to_100)
+Score must be between 0 and 100. ... ok
+test_student_can_create_appeal (results.test_integration.ResultsIntegrationTestCase.test_student_can_create_appeal)
+Student can create grade appeal. ... ok
+test_student_can_view_own_results (results.test_integration.ResultsIntegrationTestCase.test_student_can_view_own_results)
+Student can view only their own results. ... ok
+test_student_cannot_view_other_students_results (results.test_integration.ResultsIntegrationTestCase.test_student_cannot_view_other_students_results)
+Student cannot view other students' results. ... ok
+test_teacher_can_resubmit_unlocked_result (results.test_integration.ResultsIntegrationTestCase.test_teacher_can_resubmit_unlocked_result)
+Teacher can submit an unlocked result again. ... ok
+test_teacher_can_review_appeal (results.test_integration.ResultsIntegrationTestCase.test_teacher_can_review_appeal)
+Teacher can review appeal. ... ok
+test_teacher_can_submit_result (results.test_integration.ResultsIntegrationTestCase.test_teacher_can_submit_result)
+Teacher can submit result to lock it. ... ok
+test_teacher_can_update_raw_score (results.test_integration.ResultsIntegrationTestCase.test_teacher_can_update_raw_score)
+Teacher can update raw_score. ... ok
+test_teacher_can_view_own_students (results.test_integration.ResultsIntegrationTestCase.test_teacher_can_view_own_students)
+Teacher can view results for their students. ... ok
+test_teacher_cannot_edit_locked_result (results.test_integration.ResultsIntegrationTestCase.test_teacher_cannot_edit_locked_result)
+Teacher cannot edit locked result. ... ok
+test_teacher_cannot_update_grade (results.test_integration.ResultsIntegrationTestCase.test_teacher_cannot_update_grade)
+Teacher cannot update grade directly. ... ok
+test_teacher_cannot_view_other_teachers_students (results.test_integration.ResultsIntegrationTestCase.test_teacher_cannot_view_other_teachers_students)
+Teacher cannot view results for other teachers' students. ... ok
+test_unique_constraint_prevents_duplicates (results.test_integration.ResultsIntegrationTestCase.test_unique_constraint_prevents_duplicates)
+Unique constraint prevents duplicate results. ... ok
+test_admin_gets_all_data (results.test_role_based_endpoints.RoleBasedEndpointTestCase.test_admin_gets_all_data)
+Admin should get ALL data including status and submission details. ... ok
+test_admin_sees_all_fields_in_detail (results.test_role_based_endpoints.RoleBasedEndpointTestCase.test_admin_sees_all_fields_in_detail)
+Admin should see all fields including status. ... ok
+test_student_cannot_see_other_students_results (results.test_role_based_endpoints.RoleBasedEndpointTestCase.test_student_cannot_see_other_students_results)
+Student should only see their own results. ... ok
+test_student_gets_own_results_with_grades (results.test_role_based_endpoints.RoleBasedEndpointTestCase.test_student_gets_own_results_with_grades)
+Student should get own results with: course, score, grade, GPA, pass_fail. ... ok
+test_student_sees_grades_in_detail (results.test_role_based_endpoints.RoleBasedEndpointTestCase.test_student_sees_grades_in_detail)
+Student should see grades when viewing their own result. ... ok
+test_teacher_cannot_see_grades_in_detail (results.test_role_based_endpoints.RoleBasedEndpointTestCase.test_teacher_cannot_see_grades_in_detail)
+Teacher should not see grades even when viewing detail. ... ok
+test_teacher_cannot_see_other_teachers_students (results.test_role_based_endpoints.RoleBasedEndpointTestCase.test_teacher_cannot_see_other_teachers_students)
+Teacher should only see students from their own courses. ... ok
+test_teacher_gets_only_scores (results.test_role_based_endpoints.RoleBasedEndpointTestCase.test_teacher_gets_only_scores)
+Teacher should get ONLY: student_name, course_title, raw_score. ... ok
+
+----------------------------------------------------------------------
+Ran 64 tests in 1424.779s
+
+OK
+Destroying test database for alias 'default' ('file:memorydb_default?mode=memory&cache=shared')...
+ OK
+System check identified no issues (0 silenced).

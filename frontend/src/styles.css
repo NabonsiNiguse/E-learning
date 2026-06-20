@@ -1,0 +1,464 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Plus Jakarta Sans", "Inter", ui-sans-serif, sans-serif;
+  --shadow-soft: 0 1px 2px 0 oklch(0.2 0.04 240 / 0.04), 0 4px 16px -2px oklch(0.2 0.04 240 / 0.06);
+  --shadow-glow: 0 8px 32px -8px oklch(0.55 0.22 264 / 0.45);
+}
+
+:root {
+  --radius: 0.75rem;
+
+  /* Slate neutrals */
+  --background: oklch(0.99 0.005 180);
+  --foreground: oklch(0.21 0.03 250);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.03 250);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.21 0.03 250);
+
+  /* Indigo/Violet primary — modern, premium */
+  --primary: oklch(0.55 0.22 264);
+  --primary-foreground: oklch(0.99 0.01 264);
+  --primary-soft: oklch(0.94 0.05 264);
+
+  --secondary: oklch(0.96 0.01 250);
+  --secondary-foreground: oklch(0.27 0.04 250);
+
+  --muted: oklch(0.965 0.008 250);
+  --muted-foreground: oklch(0.5 0.03 250);
+
+  --accent: oklch(0.94 0.05 264);
+  --accent-foreground: oklch(0.35 0.18 264);
+
+  --destructive: oklch(0.6 0.22 27);
+  --destructive-foreground: oklch(0.99 0 0);
+
+  --success: oklch(0.65 0.16 156);
+  --success-foreground: oklch(0.99 0 0);
+  --warning: oklch(0.78 0.15 75);
+  --warning-foreground: oklch(0.25 0.05 75);
+
+  --border: oklch(0.92 0.01 250);
+  --input: oklch(0.92 0.01 250);
+  --ring: oklch(0.55 0.22 264);
+
+  /* Distinct darker sidebar */
+  --sidebar: oklch(0.92 0.01 250);
+  --sidebar-foreground: oklch(0.25 0.04 250);
+  --sidebar-primary: oklch(0.55 0.22 264);
+  --sidebar-primary-foreground: oklch(0.99 0.01 264);
+  --sidebar-accent: oklch(0.88 0.02 250);
+  --sidebar-accent-foreground: oklch(0.35 0.18 264);
+  --sidebar-border: oklch(0.85 0.01 250);
+  --sidebar-ring: oklch(0.55 0.22 264);
+}
+
+.dark {
+  --background: oklch(0.16 0.025 250);
+  --foreground: oklch(0.96 0.01 250);
+  --card: oklch(0.22 0.03 250);
+  --card-foreground: oklch(0.96 0.01 250);
+  --popover: oklch(0.22 0.03 250);
+  --popover-foreground: oklch(0.96 0.01 250);
+  --primary: oklch(0.65 0.22 264);
+  --primary-foreground: oklch(0.18 0.04 264);
+  --primary-soft: oklch(0.28 0.08 264);
+  --secondary: oklch(0.28 0.04 250);
+  --secondary-foreground: oklch(0.96 0.01 250);
+  --muted: oklch(0.28 0.04 250);
+  --muted-foreground: oklch(0.7 0.02 250);
+  --accent: oklch(0.28 0.08 264);
+  --accent-foreground: oklch(0.85 0.12 264);
+  --destructive: oklch(0.65 0.2 27);
+  --destructive-foreground: oklch(0.99 0 0);
+  --success: oklch(0.7 0.17 156);
+  --success-foreground: oklch(0.16 0.04 156);  --warning: oklch(0.78 0.15 75);
+  --warning-foreground: oklch(0.18 0.05 75);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.65 0.22 264);
+  --sidebar: oklch(0.18 0.025 250);
+  --sidebar-foreground: oklch(0.85 0.02 250);
+  --sidebar-primary: oklch(0.65 0.22 264);
+  --sidebar-primary-foreground: oklch(0.18 0.04 264);
+  --sidebar-accent: oklch(0.25 0.03 250);
+  --sidebar-accent-foreground: oklch(0.96 0.01 250);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.65 0.22 264);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html, body {
+    font-family: var(--font-sans);
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+}
+
+@layer utilities {
+  .gradient-hero {
+    background: radial-gradient(ellipse at top left, oklch(0.95 0.06 156 / 0.6), transparent 60%),
+                radial-gradient(ellipse at bottom right, oklch(0.93 0.04 220 / 0.5), transparent 60%),
+                var(--background);
+  }
+  .gradient-primary {
+    background: linear-gradient(135deg, oklch(0.55 0.22 264), oklch(0.48 0.22 280));
+  }
+  .text-gradient {
+    background: linear-gradient(135deg, oklch(0.50 0.24 264), oklch(0.45 0.22 290));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}
+
+/* Sidebar accordion — grid-rows height animation */
+@layer utilities {
+  .grid-rows-\[0fr\] { grid-template-rows: 0fr; }
+  .grid-rows-\[1fr\] { grid-template-rows: 1fr; }
+}
+
+/* ─── Global interactive element upgrades ────────────────────────────────── */
+@layer base {
+  /* Smooth transitions on all interactive elements */
+  button, a, [role="button"], [role="tab"], [role="checkbox"], [role="switch"] {
+    transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+    transition-duration: 150ms;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Focus ring — consistent across all focusable elements */
+  :focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* Inputs — subtle lift on focus */
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    box-shadow: 0 0 0 3px oklch(from var(--color-ring) l c h / 0.15);
+  }
+}
+
+/* ─── Card hover system ───────────────────────────────────────────────────── */
+@layer utilities {
+  /* Standard interactive card */
+  .card-interactive {
+    transition: box-shadow 200ms ease, transform 200ms ease, border-color 200ms ease;
+  }
+  .card-interactive:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px -4px oklch(0.2 0.04 250 / 0.12), 0 2px 8px -2px oklch(0.2 0.04 250 / 0.08);
+    border-color: oklch(from var(--color-border) calc(l - 0.05) c h);
+  }
+
+  /* Subtle card — less lift */
+  .card-subtle {
+    transition: box-shadow 200ms ease, background-color 150ms ease;
+  }
+  .card-subtle:hover {
+    box-shadow: 0 4px 16px -4px oklch(0.2 0.04 250 / 0.1);
+    background-color: oklch(from var(--color-card) calc(l - 0.005) c h);
+  }
+}
+
+/* ─── Button active press effect ─────────────────────────────────────────── */
+@layer base {
+  button:not(:disabled):active {
+    transform: scale(0.97);
+  }
+  /* Don't apply to icon-only ghost buttons */
+  button[data-variant="ghost"]:not(:disabled):active {
+    transform: scale(0.95);
+  }
+}
+
+/* ─── Table row hover ─────────────────────────────────────────────────────── */
+@layer base {
+  tbody tr {
+    transition: background-color 120ms ease;
+  }
+}
+
+/* ─── Scrollbar styling ───────────────────────────────────────────────────── */
+@layer base {
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: oklch(0.75 0.01 250);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.6 0.02 250);
+  }
+  .dark ::-webkit-scrollbar-thumb {
+    background: oklch(0.35 0.02 250);
+  }
+  .dark ::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.45 0.02 250);
+  }
+  .scrollbar-hide {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ─── Typography scale refinements ───────────────────────────────────────── */
+@layer base {
+  /* Override the legacy index.css h1/h2 sizes that fight Tailwind */
+  h1 { font-size: inherit; letter-spacing: inherit; margin: 0; }
+  h2 { font-size: inherit; line-height: inherit; letter-spacing: inherit; margin: 0; }
+  p  { margin: 0; }
+}
+
+/* ─── Page section spacing ────────────────────────────────────────────────── */
+@layer utilities {
+  .page-section {
+    @apply space-y-6;
+  }
+  .section-header {
+    @apply flex items-center justify-between flex-wrap gap-3;
+  }
+  .section-title {
+    @apply text-xl font-display font-bold tracking-tight;
+  }
+  .section-subtitle {
+    @apply text-sm text-muted-foreground mt-0.5;
+  }
+}
+
+/* ─── Stat card glow on hover ─────────────────────────────────────────────── */
+@layer utilities {
+  .stat-card-hover {
+    transition: box-shadow 200ms ease, transform 200ms ease;
+  }
+  .stat-card-hover:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px -4px oklch(0.2 0.04 250 / 0.12);
+  }
+}
+
+/* ─── Filter pill active indicator ───────────────────────────────────────── */
+@layer utilities {
+  .filter-pill {
+    @apply inline-flex items-center gap-1.5 h-8 px-3 rounded-full text-xs font-medium border transition-all duration-150 select-none cursor-pointer;
+  }
+  .filter-pill-inactive {
+    @apply bg-background border-border text-muted-foreground hover:border-foreground/25 hover:text-foreground hover:bg-muted/50 hover:shadow-sm hover:-translate-y-px;
+  }
+  .filter-pill-active {
+    @apply bg-foreground border-foreground text-background shadow-sm;
+  }
+}
+
+/* ─── Link hover underline ────────────────────────────────────────────────── */
+@layer utilities {
+  .link-hover {
+    @apply text-primary hover:underline underline-offset-2 transition-colors;
+  }
+}
+
+/* ─── Badge pulse for notifications ──────────────────────────────────────── */
+@layer utilities {
+  .badge-pulse {
+    animation: badge-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  @keyframes badge-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+}
+
+/* ─── Skeleton loading ────────────────────────────────────────────────────── */
+@layer utilities {
+  .skeleton {
+    @apply animate-pulse rounded-md bg-muted;
+  }
+}
+
+/* ─── Alert banner variants ───────────────────────────────────────────────── */
+@layer utilities {
+  .alert-warning {
+    @apply flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/8 px-4 py-3;
+  }
+  .alert-danger {
+    @apply flex items-start gap-3 rounded-xl border border-red-500/25 bg-red-500/8 px-4 py-3;
+  }
+  .alert-success {
+    @apply flex items-start gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/8 px-4 py-3;
+  }
+  .alert-info {
+    @apply flex items-start gap-3 rounded-xl border border-sky-500/25 bg-sky-500/8 px-4 py-3;
+  }
+}
+
+/* ─── Premium Sidebar Glow Effects ──────────────────────────────────────── */
+@layer utilities {
+  .drop-shadow-glow {
+    filter: drop-shadow(0 0 8px currentColor) drop-shadow(0 0 4px currentColor);
+  }
+
+  .shadow-glow {
+    box-shadow: 
+      0 0 20px -5px currentColor,
+      0 0 40px -10px currentColor,
+      0 4px 16px -4px rgba(0, 0, 0, 0.1);
+  }
+
+  .text-glow {
+    text-shadow: 
+      0 0 10px currentColor,
+      0 0 20px currentColor,
+      0 0 30px currentColor;
+  }
+
+  /* Gradient utilities for sidebar items */
+  .gradient-primary {
+    background: linear-gradient(135deg, oklch(0.55 0.22 264), oklch(0.48 0.22 280));
+  }
+
+  .gradient-violet {
+    background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+  }
+
+  .gradient-blue {
+    background: linear-gradient(135deg, #3b82f6, #2563eb);
+  }
+
+  .gradient-emerald {
+    background: linear-gradient(135deg, #10b981, #059669);
+  }
+
+  .gradient-amber {
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+  }
+
+  .gradient-rose {
+    background: linear-gradient(135deg, #f43f5e, #e11d48);
+  }
+
+  /* Animated gradient backgrounds */
+  @keyframes gradient-shift {
+    0%, 100% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
+  }
+
+  .animate-gradient {
+    background-size: 200% 200%;
+    animation: gradient-shift 3s ease infinite;
+  }
+
+  /* Pulse glow animation */
+  @keyframes pulse-glow {
+    0%, 100% {
+      opacity: 0.5;
+      box-shadow: 0 0 10px currentColor;
+    }
+    50% {
+      opacity: 1;
+      box-shadow: 0 0 20px currentColor, 0 0 30px currentColor;
+    }
+  }
+
+  .animate-pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+
+  /* Floating animation */
+  @keyframes float {
+    0%, 100% {
+      transform: translateY(0px);
+    }
+    50% {
+      transform: translateY(-4px);
+    }
+  }
+
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+}
+
+/* ─── Smooth scrollbar for sidebar ──────────────────────────────────────── */
+.sidebar-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-scrollbar::-webkit-scrollbar-thumb {
+  background: oklch(0.35 0.05 250);
+  border-radius: 3px;
+}
+
+.sidebar-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.45 0.06 250);
+}

@@ -1,0 +1,20 @@
+{% extends "admin/index.html" %}
+{% load i18n %}
+
+{% block content %}
+<div id="learnly-stats" style="margin-bottom:24px;">
+  <h2 style="font-size:20px;font-weight:700;margin-bottom:16px;color:#111827;">
+    📊 Platform Overview
+  </h2>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:24px;">
+    {% for stat in platform_stats %}
+    <div style="background:white;border:1px solid #e5e7eb;border-radius:12px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
+      <div style="font-size:24px;margin-bottom:4px;">{{ stat.icon }}</div>
+      <div style="font-size:24px;font-weight:800;color:#111827;line-height:1;">{{ stat.value }}</div>
+      <div style="font-size:12px;color:#6b7280;margin-top:4px;font-weight:500;">{{ stat.label }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{{ block.super }}
+{% endblock %}
