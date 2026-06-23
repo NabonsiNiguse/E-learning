@@ -1,16 +1,9 @@
-"""
-Results admin — grading scales, student results, audit logs, and appeals.
-Full data integrity: results lock after submission, audit log is immutable.
-"""
 from django.contrib import admin
 from django.utils.html import format_html
-from django.db.models import Avg, Count
-from .models import GradingScale, GradingRule, StudentResult, ResultAuditLog, GradeAppeal
+from django.db.models import Count
+from .models import GradingScale, GradingRule, AssessmentTemplate, AssessmentScore, Grade, AcademicAuditLog, GradeAppeal
 
 
-# ---------------------------------------------------------------------------
-# GradingRule inline
-# ---------------------------------------------------------------------------
 class GradingRuleInline(admin.TabularInline):
     model   = GradingRule
     extra   = 0
@@ -18,9 +11,6 @@ class GradingRuleInline(admin.TabularInline):
     ordering = ['-min_score']
 
 
-# ---------------------------------------------------------------------------
-# GradingScale
-# ---------------------------------------------------------------------------
 class GradingScaleAdmin(admin.ModelAdmin):
     list_display  = ['name', 'is_active_badge', 'rule_count', 'created_at']
     list_filter   = ['is_active']
@@ -46,61 +36,47 @@ class GradingScaleAdmin(admin.ModelAdmin):
         return obj._rule_count
 
 
-# ---------------------------------------------------------------------------
-# StudentResult
-# ---------------------------------------------------------------------------
-class StudentResultAdmin(admin.ModelAdmin):
+class AssessmentTemplateAdmin(admin.ModelAdmin):
+    list_display = ['course_offering', 'name', 'max_score', 'weight_percentage']
+    list_filter = ['name']
+    search_fields = ['course_offering__course__title', 'name']
+
+
+class AssessmentScoreAdmin(admin.ModelAdmin):
+    list_display = ['enrollment', 'template', 'score_obtained', 'version', 'graded_by', 'graded_at']
+    list_filter = ['template__name']
+    search_fields = ['enrollment__student__email', 'template__name']
+    readonly_fields = ['graded_at']
+
+
+class GradeAdmin(admin.ModelAdmin):
     list_display  = [
-        'student_link', 'course_link', 'year', 'semester',
-        'raw_score', 'grade_display', 'status_badge', 'created_at',
+        'student_link', 'course_link',
+        'raw_total_score', 'grade_display', 'status_badge', 'updated_at',
     ]
-    list_filter   = ['status', 'year', 'semester', 'course__category']
-    search_fields = ['student__email', 'student__first_name', 'course__title']
-    readonly_fields = [
-        'created_at', 'updated_at',
-        'submitted_at', 'submitted_by',
-        'approved_at', 'approved_by',
-        'unlocked_at', 'unlocked_by',
-    ]
-    raw_id_fields = ['student', 'course', 'submitted_by', 'approved_by', 'unlocked_by']
-    date_hierarchy = 'created_at'
+    list_filter   = ['status', 'enrollment__course_offering__course__category']
+    search_fields = ['enrollment__student__email', 'enrollment__student__first_name', 'enrollment__course_offering__course__title']
+    readonly_fields = ['updated_at']
+    raw_id_fields = ['enrollment']
     list_per_page  = 30
     save_on_top    = True
-    actions        = ['approve_results', 'unlock_results']
-
-    fieldsets = (
-        ('Result', {
-            'fields': ('student', 'course', 'year', 'semester', 'raw_score', 'status'),
-        }),
-        ('Workflow', {
-            'classes': ('collapse',),
-            'fields': (
-                'submitted_at', 'submitted_by',
-                'approved_at', 'approved_by',
-                'unlocked_at', 'unlocked_by',
-            ),
-        }),
-        ('Timestamps', {
-            'classes': ('collapse',),
-            'fields': ('created_at', 'updated_at'),
-        }),
-    )
+    actions        = ['approve_grades', 'unlock_grades']
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related('student', 'course')
+        return super().get_queryset(request).select_related('enrollment__student', 'enrollment__course_offering__course')
 
     @admin.display(description='Student')
     def student_link(self, obj):
         return format_html(
             '<a href="/admin/users/user/{}/change/">{}</a>',
-            obj.student_id, obj.student.full_name
+            obj.enrollment.student_id, obj.enrollment.student.full_name
         )
 
     @admin.display(description='Course')
     def course_link(self, obj):
         return format_html(
             '<a href="/admin/courses/course/{}/change/">{}</a>',
-            obj.course_id, obj.course.title
+            obj.enrollment.course_offering.course_id, obj.enrollment.course_offering.course.title
         )
 
     @admin.display(description='Grade')
@@ -119,9 +95,8 @@ class StudentResultAdmin(admin.ModelAdmin):
     def status_badge(self, obj):
         styles = {
             'draft':     ('background:#fef3c7;color:#92400e', '○ Draft'),
-            'submitted': ('background:#dbeafe;color:#1e40af', '→ Submitted'),
-            'approved':  ('background:#d1fae5;color:#065f46', '✓ Approved'),
-            'unlocked':  ('background:#ede9fe;color:#5b21b6', '↩ Unlocked'),
+            'locked':    ('background:#dbeafe;color:#1e40af', '→ Locked'),
+            'released':  ('background:#d1fae5;color:#065f46', '✓ Released'),
         }
         style, label = styles.get(obj.status, ('background:#f3f4f6;color:#374151', obj.status))
         return format_html(
@@ -129,36 +104,26 @@ class StudentResultAdmin(admin.ModelAdmin):
             style, label
         )
 
-    @admin.action(description='✓ Approve selected results')
-    def approve_results(self, request, queryset):
-        from django.utils import timezone
-        updated = queryset.filter(status='submitted').update(
-            status=StudentResult.Status.APPROVED,
-            approved_at=timezone.now(),
-            approved_by=request.user,
+    @admin.action(description='✓ Approve/Release selected grades')
+    def approve_grades(self, request, queryset):
+        updated = queryset.filter(status='locked').update(
+            status=Grade.Status.RELEASED,
         )
-        self.message_user(request, f'{updated} result(s) approved.')
+        self.message_user(request, f'{updated} grade(s) released.')
 
-    @admin.action(description='↩ Unlock selected results for correction')
-    def unlock_results(self, request, queryset):
-        from django.utils import timezone
-        updated = queryset.filter(status__in=['submitted', 'approved']).update(
-            status=StudentResult.Status.UNLOCKED,
-            unlocked_at=timezone.now(),
-            unlocked_by=request.user,
+    @admin.action(description='↩ Unlock selected grades for draft edits')
+    def unlock_grades(self, request, queryset):
+        updated = queryset.filter(status__in=['locked', 'released']).update(
+            status=Grade.Status.DRAFT,
         )
-        self.message_user(request, f'{updated} result(s) unlocked.')
+        self.message_user(request, f'{updated} grade(s) unlocked to draft.')
 
 
-# ---------------------------------------------------------------------------
-# ResultAuditLog — immutable
-# ---------------------------------------------------------------------------
-class ResultAuditLogAdmin(admin.ModelAdmin):
-    list_display  = ['result_link', 'action_badge', 'performed_by_link', 'role', 'timestamp']
-    list_filter   = ['action', 'performed_by_role', 'timestamp']
-    search_fields = ['performed_by__email', 'result__student__email']
-    readonly_fields = ['result', 'action', 'performed_by', 'performed_by_role',
-                       'old_value', 'new_value', 'note', 'timestamp']
+class AcademicAuditLogAdmin(admin.ModelAdmin):
+    list_display  = ['table_name', 'record_id', 'action', 'changed_by', 'timestamp']
+    list_filter   = ['action', 'table_name', 'timestamp']
+    search_fields = ['changed_by__email']
+    readonly_fields = ['table_name', 'record_id', 'action', 'old_value', 'new_value', 'changed_by', 'ip_address', 'timestamp']
     date_hierarchy = 'timestamp'
     list_per_page  = 40
 
@@ -166,66 +131,27 @@ class ResultAuditLogAdmin(admin.ModelAdmin):
     def has_change_permission(self, request, obj=None): return False
     def has_delete_permission(self, request, obj=None): return False
 
-    @admin.display(description='Result')
-    def result_link(self, obj):
-        return format_html(
-            '<a href="/admin/results/studentresult/{}/change/">Result #{}</a>',
-            obj.result_id, obj.result_id
-        )
 
-    @admin.display(description='Action')
-    def action_badge(self, obj):
-        colors = {
-            'created':   ('#059669', '#d1fae5'),
-            'score_set': ('#2563eb', '#dbeafe'),
-            'submitted': ('#d97706', '#fef3c7'),
-            'approved':  ('#059669', '#d1fae5'),
-            'unlocked':  ('#7c3aed', '#ede9fe'),
-            'deleted':   ('#dc2626', '#fee2e2'),
-        }
-        fg, bg = colors.get(obj.action, ('#6b7280', '#f3f4f6'))
-        return format_html(
-            '<span style="background:{};color:{};padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;">{}</span>',
-            bg, fg, obj.action.replace('_', ' ').title()
-        )
-
-    @admin.display(description='By')
-    def performed_by_link(self, obj):
-        if obj.performed_by:
-            return format_html(
-                '<a href="/admin/users/user/{}/change/">{}</a>',
-                obj.performed_by_id, obj.performed_by.full_name
-            )
-        return '—'
-
-    @admin.display(description='Role')
-    def role(self, obj):
-        return obj.performed_by_role.replace('_', ' ').title()
-
-
-# ---------------------------------------------------------------------------
-# GradeAppeal
-# ---------------------------------------------------------------------------
 class GradeAppealAdmin(admin.ModelAdmin):
     list_display  = [
-        'student_link', 'result_link', 'status_badge',
+        'student_link', 'grade_link', 'status_badge',
         'teacher_reviewed_by_display', 'override_by_display', 'created_at',
     ]
     list_filter   = ['status', 'created_at']
     search_fields = ['student__email', 'student__first_name']
     readonly_fields = [
-        'student', 'result', 'reason',
+        'student', 'grade', 'reason',
         'teacher_reviewed_by', 'teacher_reviewed_at',
         'override_by', 'override_at',
         'created_at', 'updated_at',
     ]
-    raw_id_fields = ['result']
+    raw_id_fields = ['grade']
     date_hierarchy = 'created_at'
     list_per_page  = 25
 
     fieldsets = (
         ('Appeal', {
-            'fields': ('student', 'result', 'reason', 'status'),
+            'fields': ('student', 'grade', 'reason', 'status'),
         }),
         ('Teacher Review', {
             'fields': ('teacher_response', 'teacher_reviewed_by', 'teacher_reviewed_at'),
@@ -246,11 +172,11 @@ class GradeAppealAdmin(admin.ModelAdmin):
             obj.student_id, obj.student.full_name
         )
 
-    @admin.display(description='Result')
-    def result_link(self, obj):
+    @admin.display(description='Grade')
+    def grade_link(self, obj):
         return format_html(
-            '<a href="/admin/results/studentresult/{}/change/">Result #{}</a>',
-            obj.result_id, obj.result_id
+            '<a href="/admin/results/grade/{}/change/">Grade #{}</a>',
+            obj.grade_id, obj.grade_id
         )
 
     @admin.display(description='Status')

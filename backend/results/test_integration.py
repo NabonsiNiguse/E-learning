@@ -1,31 +1,43 @@
-"""
-Integration tests for the Results system.
-Tests role-based access, data integrity, and workflow.
-"""
 from django.test import TestCase
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework import status
-from courses.models import Course
+from django.db import transaction
+from courses.models import Faculty, Department, Course, AcademicSemester, CourseOffering
+from enrollments.models import Enrollment
 from results.models import (
-    StudentResult, GradingScale, GradingRule, ResultAuditLog, GradeAppeal
+    GradingScale, GradingRule, AssessmentTemplate, AssessmentScore, Grade, GradeAppeal, AcademicAuditLog
 )
 
 User = get_user_model()
 
 
 class ResultsIntegrationTestCase(TestCase):
-    """Integration tests for results system."""
+    """Integration tests for the refactored results and grading system."""
 
     def setUp(self):
-        """Set up test data."""
-        # Create users
+        # Create users with new roles
         self.admin = User.objects.create_user(
             email='admin@test.com',
             password='testpass123',
             first_name='Admin',
             last_name='User',
             role=User.Role.ADMIN,
+        )
+        self.dean = User.objects.create_user(
+            email='dean@test.com',
+            password='testpass123',
+            first_name='Dean',
+            last_name='User',
+            role=User.Role.DEAN,
+        )
+        self.dept_head = User.objects.create_user(
+            email='head@test.com',
+            password='testpass123',
+            first_name='Head',
+            last_name='User',
+            role=User.Role.DEPT_HEAD,
         )
         self.teacher = User.objects.create_user(
             email='teacher@test.com',
@@ -41,370 +53,206 @@ class ResultsIntegrationTestCase(TestCase):
             last_name='User',
             role=User.Role.STUDENT,
         )
-        self.other_student = User.objects.create_user(
-            email='other@test.com',
-            password='testpass123',
-            first_name='Other',
-            last_name='Student',
-            role=User.Role.STUDENT,
-        )
 
-        # Create course
+        # Create organizational structure
+        self.faculty = Faculty.objects.create(
+            name='Engineering',
+            code='ENG',
+            dean=self.dean
+        )
+        self.department = Department.objects.create(
+            faculty=self.faculty,
+            name='Computer Science',
+            code='CS',
+            head=self.dept_head
+        )
         self.course = Course.objects.create(
-            title='Test Course',
-            description='Test',
-            teacher=self.teacher,
-            category='Test',
-            level='Beginner',
+            department=self.department,
+            title='Software Engineering',
+            slug='se-301',
+            description='Test course detail',
+            status=Course.Status.PUBLISHED
+        )
+        self.semester = AcademicSemester.objects.create(
+            year=2026,
+            semester='Fall',
+            is_active=True
+        )
+        self.offering = CourseOffering.objects.create(
+            course=self.course,
+            semester=self.semester,
+            instructor=self.teacher,
+            section_code='A',
+            max_capacity=30
+        )
+        self.enrollment = Enrollment.objects.create(
+            student=self.student,
+            course_offering=self.offering,
+            status=Enrollment.Status.ACTIVE
         )
 
         # Create grading scale
         self.scale = GradingScale.objects.create(
-            name='Test Scale',
+            name='Standard Scale',
             is_active=True,
-            created_by=self.admin,
+            created_by=self.admin
         )
         GradingRule.objects.create(
             scale=self.scale,
-            letter='A+',
-            min_score=95,
-            max_score=100,
+            letter='A',
+            min_score=90.0,
+            max_score=100.0,
             gpa_points=4.0,
-            pass_fail='pass',
+            pass_fail='pass'
         )
         GradingRule.objects.create(
             scale=self.scale,
             letter='F',
-            min_score=0,
+            min_score=0.0,
             max_score=59.99,
             gpa_points=0.0,
-            pass_fail='fail',
+            pass_fail='fail'
         )
 
-        # Create result
-        self.result = StudentResult.objects.create(
-            student=self.student,
-            course=self.course,
-            year=2024,
-            semester='semester_1',
-            status=StudentResult.Status.DRAFT,
+        # Create assessment template (Midterm worth 100% of final grade)
+        self.template = AssessmentTemplate.objects.create(
+            course_offering=self.offering,
+            name='Midterm',
+            max_score=100.0,
+            weight_percentage=100.0
+        )
+
+        self.assessment_score = AssessmentScore.objects.create(
+            enrollment=self.enrollment,
+            template=self.template,
+            score_obtained=None,
+            version=1
+        )
+
+        # Create Grade draft
+        self.grade = Grade.objects.create(
+            enrollment=self.enrollment,
+            raw_total_score=None,
+            status=Grade.Status.DRAFT,
+            version=1
         )
 
         self.client = APIClient()
 
-    def test_teacher_can_view_own_students(self):
-        """Teacher can view results for their students."""
+    def test_teacher_can_enter_assessment_score(self):
+        """Teacher can input and save a draft assessment score."""
         self.client.force_authenticate(user=self.teacher)
-        response = self.client.get('/api/v1/results/')
+        response = self.client.patch(
+            f'/api/v1/results/assessment-scores/{self.assessment_score.id}/',
+            {'score_obtained': 95.00, 'version': 1},
+            format='json'
+        )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertGreater(len(response.data), 0)
+        self.assessment_score.refresh_from_db()
+        self.assertEqual(self.assessment_score.score_obtained, 95.00)
+        self.assertEqual(self.assessment_score.version, 2)
 
-    def test_teacher_cannot_view_other_teachers_students(self):
-        """Teacher cannot view results for other teachers' students."""
+        # Confirm automatic recalculation of final Grade
+        self.grade.refresh_from_db()
+        self.assertEqual(self.grade.raw_total_score, 95.00)
+        self.assertEqual(self.grade.grade_letter, 'A')
+
+    def test_optimistic_locking_prevents_dirty_writes(self):
+        """Updating assessment score with stale version yields 409 Conflict."""
+        self.client.force_authenticate(user=self.teacher)
+        
+        # Concurrent update simulations
+        response1 = self.client.patch(
+            f'/api/v1/results/assessment-scores/{self.assessment_score.id}/',
+            {'score_obtained': 80.00, 'version': 1},
+            format='json'
+        )
+        self.assertEqual(response1.status_code, status.HTTP_200_OK)
+
+        response2 = self.client.patch(
+            f'/api/v1/results/assessment-scores/{self.assessment_score.id}/',
+            {'score_obtained': 90.00, 'version': 1}, # Stale version!
+            format='json'
+        )
+        self.assertEqual(response2.status_code, status.HTTP_409_CONFLICT)
+
+    def test_teacher_cannot_grade_other_offerings(self):
+        """Teacher cannot edit scores for offerings they are not assigned to."""
         other_teacher = User.objects.create_user(
             email='other_teacher@test.com',
             password='testpass123',
-            first_name='Other',
-            last_name='Teacher',
-            role=User.Role.TEACHER,
+            role=User.Role.TEACHER
         )
         self.client.force_authenticate(user=other_teacher)
-        response = self.client.get('/api/v1/results/')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 0)
-
-    def test_student_can_view_own_results(self):
-        """Student can view only their own results."""
-        self.client.force_authenticate(user=self.student)
-        response = self.client.get('/api/v1/results/')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
-        self.assertEqual(response.data[0]['id'], self.result.id)
-
-    def test_student_cannot_view_other_students_results(self):
-        """Student cannot view other students' results."""
-        self.client.force_authenticate(user=self.other_student)
-        response = self.client.get('/api/v1/results/')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 0)
-
-    def test_admin_can_view_all_results(self):
-        """Admin can view all results."""
-        self.client.force_authenticate(user=self.admin)
-        response = self.client.get('/api/v1/results/')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertGreater(len(response.data), 0)
-
-    def test_teacher_can_update_raw_score(self):
-        """Teacher can update raw_score."""
-        self.client.force_authenticate(user=self.teacher)
         response = self.client.patch(
-            f'/api/v1/results/{self.result.id}/',
-            {'raw_score': 85.5},
-            format='json',
-        )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.result.refresh_from_db()
-        self.assertEqual(float(self.result.raw_score), 85.5)
-
-    def test_teacher_cannot_update_grade(self):
-        """Teacher cannot update grade directly."""
-        self.client.force_authenticate(user=self.teacher)
-        response = self.client.patch(
-            f'/api/v1/results/{self.result.id}/',
-            {'status': 'submitted'},
-            format='json',
-        )
-        # Should fail or ignore the status field
-        self.result.refresh_from_db()
-        self.assertEqual(self.result.status, StudentResult.Status.DRAFT)
-
-    def test_score_validation_0_to_100(self):
-        """Score must be between 0 and 100."""
-        self.client.force_authenticate(user=self.teacher)
-        
-        # Test > 100
-        response = self.client.patch(
-            f'/api/v1/results/{self.result.id}/',
-            {'raw_score': 150},
-            format='json',
-        )
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        
-        # Test < 0
-        response = self.client.patch(
-            f'/api/v1/results/{self.result.id}/',
-            {'raw_score': -10},
-            format='json',
-        )
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-
-    def test_grade_computed_from_scale(self):
-        """Grade is computed from GradingScale."""
-        self.result.raw_score = 98
-        self.result.save()
-        
-        computed = self.result.compute_grade()
-        self.assertIsNotNone(computed)
-        self.assertEqual(computed['letter'], 'A+')
-        self.assertEqual(computed['gpa'], 4.0)
-        self.assertEqual(computed['pass_fail'], 'pass')
-
-    def test_teacher_can_submit_result(self):
-        """Teacher can submit result to lock it."""
-        self.result.raw_score = 85
-        self.result.save()
-        
-        self.client.force_authenticate(user=self.teacher)
-        response = self.client.post(
-            f'/api/v1/results/{self.result.id}/submit/',
-            {},
-            format='json',
-        )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.result.refresh_from_db()
-        self.assertEqual(self.result.status, StudentResult.Status.SUBMITTED)
-        self.assertIsNotNone(self.result.submitted_at)
-        self.assertEqual(self.result.submitted_by, self.teacher)
-
-    def test_cannot_submit_without_score(self):
-        """Cannot submit result without score."""
-        self.client.force_authenticate(user=self.teacher)
-        response = self.client.post(
-            f'/api/v1/results/{self.result.id}/submit/',
-            {},
-            format='json',
-        )
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-
-    def test_teacher_cannot_edit_locked_result(self):
-        """Teacher cannot edit locked result."""
-        self.result.raw_score = 85
-        self.result.status = StudentResult.Status.SUBMITTED
-        self.result.save()
-        
-        self.client.force_authenticate(user=self.teacher)
-        response = self.client.patch(
-            f'/api/v1/results/{self.result.id}/',
-            {'raw_score': 90},
-            format='json',
+            f'/api/v1/results/assessment-scores/{self.assessment_score.id}/',
+            {'score_obtained': 85.00, 'version': 1},
+            format='json'
         )
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_teacher_can_resubmit_unlocked_result(self):
-        """Teacher can submit an unlocked result again."""
-        self.result.raw_score = 85
-        self.result.status = StudentResult.Status.UNLOCKED
-        self.result.unlocked_at = None
-        self.result.unlocked_by = None
-        self.result.save()
+    def test_teacher_can_lock_grades(self):
+        """Teacher can submit grades to lock them from further edits."""
+        self.assessment_score.score_obtained = 92.00
+        self.assessment_score.save()
+        self.grade.raw_total_score = 92.00
+        self.grade.save()
 
         self.client.force_authenticate(user=self.teacher)
-        response = self.client.post(
-            f'/api/v1/results/{self.result.id}/submit/',
-            {},
-            format='json',
-        )
+        response = self.client.post(f'/api/v1/results/{self.grade.id}/submit/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.result.refresh_from_db()
-        self.assertEqual(self.result.status, StudentResult.Status.SUBMITTED)
-        self.assertIsNotNone(self.result.submitted_at)
-        self.assertEqual(self.result.submitted_by, self.teacher)
-
-    def test_admin_can_approve_result(self):
-        """Admin can approve submitted result."""
-        self.result.raw_score = 85
-        self.result.status = StudentResult.Status.SUBMITTED
-        self.result.save()
         
-        self.client.force_authenticate(user=self.admin)
-        response = self.client.post(
-            f'/api/v1/results/{self.result.id}/approve/',
-            {},
-            format='json',
-        )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.result.refresh_from_db()
-        self.assertEqual(self.result.status, StudentResult.Status.APPROVED)
-        self.assertIsNotNone(self.result.approved_at)
-        self.assertEqual(self.result.approved_by, self.admin)
+        self.grade.refresh_from_db()
+        self.assertEqual(self.grade.status, Grade.Status.LOCKED)
 
-    def test_admin_can_unlock_result(self):
-        """Admin can unlock result."""
-        self.result.raw_score = 85
-        self.result.status = StudentResult.Status.SUBMITTED
-        self.result.save()
+        # Teacher should no longer be allowed to modify scores once grade is locked
+        response_edit = self.client.patch(
+            f'/api/v1/results/assessment-scores/{self.assessment_score.id}/',
+            {'score_obtained': 99.00, 'version': 2},
+            format='json'
+        )
+        self.assertEqual(response_edit.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_dept_head_can_release_locked_grades(self):
+        """Department head can release locked grades to students."""
+        self.grade.status = Grade.Status.LOCKED
+        self.grade.save()
+
+        self.client.force_authenticate(user=self.dept_head)
+        response = self.client.post(f'/api/v1/results/{self.grade.id}/approve/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
         
-        self.client.force_authenticate(user=self.admin)
-        response = self.client.post(
-            f'/api/v1/results/{self.result.id}/unlock/',
-            {},
-            format='json',
-        )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.result.refresh_from_db()
-        self.assertEqual(self.result.status, StudentResult.Status.UNLOCKED)
-        self.assertIsNotNone(self.result.unlocked_at)
-        self.assertEqual(self.result.unlocked_by, self.admin)
+        self.grade.refresh_from_db()
+        self.assertEqual(self.grade.status, Grade.Status.RELEASED)
 
-    def test_audit_log_created_on_score_update(self):
-        """Audit log created when score updated."""
+    def test_student_can_only_view_released_grades(self):
+        """Student cannot see grades unless status is Released."""
+        self.client.force_authenticate(user=self.student)
+
+        # 1. Draft state -> not visible (paginated response has count=0)
+        Grade.objects.filter(pk=self.grade.pk).update(status=Grade.Status.DRAFT)
+        response_draft = self.client.get('/api/v1/results/')
+        self.assertEqual(response_draft.status_code, status.HTTP_200_OK)
+        # Pagination wraps results: {'count': N, 'results': [...]}
+        draft_results = response_draft.data.get('results', response_draft.data)
+        self.assertEqual(len(draft_results), 0)
+
+        # 2. Released state -> visible (count=1)
+        Grade.objects.filter(pk=self.grade.pk).update(status=Grade.Status.RELEASED)
+        response_released = self.client.get('/api/v1/results/')
+        self.assertEqual(response_released.status_code, status.HTTP_200_OK)
+        released_results = response_released.data.get('results', response_released.data)
+        self.assertEqual(len(released_results), 1)
+
+    def test_audit_logs_record_mutations(self):
+        """Grade modifications must produce an AcademicAuditLog entry."""
         self.client.force_authenticate(user=self.teacher)
         self.client.patch(
-            f'/api/v1/results/{self.result.id}/',
-            {'raw_score': 85.5},
-            format='json',
+            f'/api/v1/results/assessment-scores/{self.assessment_score.id}/',
+            {'score_obtained': 88.00, 'version': 1},
+            format='json'
         )
-        
-        logs = ResultAuditLog.objects.filter(result=self.result)
-        self.assertEqual(logs.count(), 1)
-        log = logs.first()
-        self.assertEqual(log.action, ResultAuditLog.Action.SCORE_SET)
-        self.assertEqual(log.performed_by, self.teacher)
-        self.assertEqual(log.performed_by_role, 'teacher')
 
-    def test_audit_log_created_on_submit(self):
-        """Audit log created when result submitted."""
-        self.result.raw_score = 85
-        self.result.save()
-        
-        self.client.force_authenticate(user=self.teacher)
-        self.client.post(
-            f'/api/v1/results/{self.result.id}/submit/',
-            {},
-            format='json',
-        )
-        
-        logs = ResultAuditLog.objects.filter(result=self.result)
-        self.assertEqual(logs.count(), 1)
-        log = logs.first()
-        self.assertEqual(log.action, ResultAuditLog.Action.SUBMITTED)
-
-    def test_unique_constraint_prevents_duplicates(self):
-        """Unique constraint prevents duplicate results."""
-        with self.assertRaises(Exception):
-            StudentResult.objects.create(
-                student=self.student,
-                course=self.course,
-                year=2024,
-                semester='semester_1',
-            )
-
-    def test_only_one_active_grading_scale(self):
-        """Only one active grading scale at a time."""
-        new_scale = GradingScale.objects.create(
-            name='New Scale',
-            is_active=True,
-            created_by=self.admin,
-        )
-        
-        self.scale.refresh_from_db()
-        self.assertFalse(self.scale.is_active)
-        self.assertTrue(new_scale.is_active)
-
-    def test_student_can_create_appeal(self):
-        """Student can create grade appeal."""
-        self.result.raw_score = 50
-        self.result.status = StudentResult.Status.APPROVED
-        self.result.save()
-        
-        self.client.force_authenticate(user=self.student)
-        response = self.client.post(
-            '/api/v1/results/appeals/',
-            {
-                'result': self.result.id,
-                'reason': 'I believe my score should be higher',
-            },
-            format='json',
-        )
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        
-        appeal = GradeAppeal.objects.get(result=self.result)
-        self.assertEqual(appeal.student, self.student)
-        self.assertEqual(appeal.status, GradeAppeal.Status.PENDING)
-
-    def test_teacher_can_review_appeal(self):
-        """Teacher can review appeal."""
-        appeal = GradeAppeal.objects.create(
-            result=self.result,
-            student=self.student,
-            reason='Test appeal',
-        )
-        
-        self.client.force_authenticate(user=self.teacher)
-        response = self.client.post(
-            f'/api/v1/results/appeals/{appeal.id}/review/',
-            {'teacher_response': 'Thank you for your appeal...'},
-            format='json',
-        )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        
-        appeal.refresh_from_db()
-        self.assertEqual(appeal.status, GradeAppeal.Status.REVIEWED)
-        self.assertEqual(appeal.teacher_reviewed_by, self.teacher)
-
-    def test_admin_can_override_grade(self):
-        """Admin can override grade via appeal."""
-        appeal = GradeAppeal.objects.create(
-            result=self.result,
-            student=self.student,
-            reason='Test appeal',
-        )
-        
-        self.client.force_authenticate(user=self.admin)
-        response = self.client.post(
-            f'/api/v1/results/appeals/{appeal.id}/override/',
-            {
-                'override_score': 90,
-                'override_reason': 'Appeal approved',
-            },
-            format='json',
-        )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        
-        self.result.refresh_from_db()
-        self.assertEqual(float(self.result.raw_score), 90)
-        
-        appeal.refresh_from_db()
-        self.assertEqual(appeal.status, GradeAppeal.Status.APPROVED)
-        self.assertEqual(appeal.override_by, self.admin)
+        logs = AcademicAuditLog.objects.filter(table_name='assessment_scores')
+        self.assertTrue(logs.exists())
+        self.assertEqual(logs.first().action, 'UPDATE')

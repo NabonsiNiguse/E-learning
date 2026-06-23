@@ -11,18 +11,18 @@ from .serializers import (
     AttendanceSummarySerializer,
 )
 from users.permissions import IsAdmin, IsTeacher, IsAdminOrTeacher
-from courses.models import Course
+from courses.models import CourseOffering
 from enrollments.models import Enrollment
 
 
 class AttendanceListCreateView(generics.ListCreateAPIView):
     """
-    GET  — teacher sees records for their courses; student sees own records; admin sees all.
+    GET  — teacher sees records for their offerings; student sees own records; admin sees all.
     POST — teacher or admin creates a single record.
     """
     serializer_class = AttendanceRecordSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
-    filterset_fields = ['course', 'student', 'date', 'status']
+    filterset_fields = ['course_offering', 'student', 'date', 'status']
     ordering_fields  = ['date', 'status']
 
     def get_permissions(self):
@@ -32,12 +32,11 @@ class AttendanceListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        qs   = AttendanceRecord.objects.select_related('student', 'course', 'marked_by')
-        if user.is_admin:
+        qs   = AttendanceRecord.objects.select_related('student', 'course_offering__course', 'marked_by')
+        if user.is_super_admin or user.is_admin_only:
             return qs
         if user.is_teacher:
-            return qs.filter(course__teacher=user)
-        # Student: own records only
+            return qs.filter(course_offering__instructor=user)
         return qs.filter(student=user)
 
     def create(self, request, *args, **kwargs):
@@ -62,11 +61,11 @@ class AttendanceDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        qs   = AttendanceRecord.objects.select_related('student', 'course', 'marked_by')
-        if user.is_admin:
+        qs   = AttendanceRecord.objects.select_related('student', 'course_offering__course', 'marked_by')
+        if user.is_super_admin or user.is_admin_only:
             return qs
         if user.is_teacher:
-            return qs.filter(course__teacher=user)
+            return qs.filter(course_offering__instructor=user)
         return qs.filter(student=user)
 
     def update(self, request, *args, **kwargs):
@@ -83,8 +82,7 @@ class BulkAttendanceView(APIView):
     """
     POST /api/v1/attendance/bulk/
     Teacher marks attendance for all students in a session at once.
-    Body: { course, date, records: [{student, status, notes?}, ...] }
-    Uses update_or_create so re-submitting a session is safe.
+    Body: { course_offering, date, records: [{student, status, notes?}, ...] }
     """
     permission_classes = [IsAdminOrTeacher]
 
@@ -95,13 +93,13 @@ class BulkAttendanceView(APIView):
         teacher = request.user
 
         try:
-            course = Course.objects.get(pk=data['course'])
-        except Course.DoesNotExist:
-            return Response({'success': False, 'message': 'Course not found.'}, status=404)
+            offering = CourseOffering.objects.get(pk=data['course_offering'])
+        except CourseOffering.DoesNotExist:
+            return Response({'success': False, 'message': 'Course offering not found.'}, status=404)
 
-        if teacher.is_teacher and course.teacher != teacher:
+        if teacher.is_teacher and offering.instructor != teacher:
             return Response(
-                {'success': False, 'message': 'You do not own this course.'},
+                {'success': False, 'message': 'You are not the instructor for this offering.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -113,7 +111,7 @@ class BulkAttendanceView(APIView):
             try:
                 record, created = AttendanceRecord.objects.update_or_create(
                     student_id = r['student'],
-                    course     = course,
+                    course_offering = offering,
                     date       = data['date'],
                     defaults   = {
                         'status':    r['status'],
@@ -137,29 +135,26 @@ class BulkAttendanceView(APIView):
 
 class AttendanceSummaryView(APIView):
     """
-    GET /api/v1/attendance/summary/?course=<id>
-    Returns per-student attendance summary for a course.
-    Teachers see all students; students see only themselves.
+    GET /api/v1/attendance/summary/?course_offering=<id>
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        course_id = request.query_params.get('course')
-        if not course_id:
+        offering_id = request.query_params.get('course_offering')
+        if not offering_id:
             return Response(
-                {'success': False, 'message': 'course query param is required.'},
+                {'success': False, 'message': 'course_offering query param is required.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         user = request.user
 
-        # Verify access
         try:
-            course = Course.objects.get(pk=course_id)
-        except Course.DoesNotExist:
-            return Response({'success': False, 'message': 'Course not found.'}, status=404)
+            offering = CourseOffering.objects.get(pk=offering_id)
+        except CourseOffering.DoesNotExist:
+            return Response({'success': False, 'message': 'Course offering not found.'}, status=404)
 
-        if user.is_teacher and course.teacher != user:
+        if user.is_teacher and offering.instructor != user:
             return Response({'success': False, 'message': 'Access denied.'}, status=403)
 
         # Get enrolled students
@@ -167,17 +162,14 @@ class AttendanceSummaryView(APIView):
             students = [user]
         else:
             enrolled_ids = Enrollment.objects.filter(
-                course=course, status__in=['active', 'completed']
+                course_offering=offering, status__in=['active', 'completed']
             ).values_list('student_id', flat=True)
             from users.models import User
             students = User.objects.filter(id__in=enrolled_ids)
 
-        # Aggregate all attendance data in a single query
-        from django.db.models import Case, When, IntegerField
-        
         student_ids = [s.id for s in students]
         attendance_stats = AttendanceRecord.objects.filter(
-            student_id__in=student_ids, course=course
+            student_id__in=student_ids, course_offering=offering
         ).values('student_id').annotate(
             total=Count('id'),
             present=Count(Case(When(status='present', then=1), output_field=IntegerField())),
@@ -186,7 +178,6 @@ class AttendanceSummaryView(APIView):
             excused=Count(Case(When(status='excused', then=1), output_field=IntegerField())),
         )
         
-        # Create lookup dict
         stats_by_student = {stat['student_id']: stat for stat in attendance_stats}
         
         summaries = []
@@ -213,6 +204,6 @@ class AttendanceSummaryView(APIView):
 
         return Response({
             'success':  True,
-            'course':   {'id': course.id, 'title': course.title},
+            'course_offering': {'id': offering.id, 'title': offering.course.title},
             'summaries': summaries,
         })

@@ -1,17 +1,19 @@
 from rest_framework import serializers
 from .models import AttendanceRecord
 from users.serializers import UserListSerializer
+from courses.serializers import CourseOfferingSerializer
 
 
 class AttendanceRecordSerializer(serializers.ModelSerializer):
     student_detail  = UserListSerializer(source='student', read_only=True)
     marked_by_name  = serializers.SerializerMethodField()
     course_title    = serializers.SerializerMethodField()
+    course_offering_detail = CourseOfferingSerializer(source='course_offering', read_only=True)
 
     class Meta:
         model  = AttendanceRecord
         fields = [
-            'id', 'student', 'student_detail', 'course', 'course_title',
+            'id', 'student', 'student_detail', 'course_offering', 'course_offering_detail', 'course_title',
             'marked_by', 'marked_by_name', 'date', 'status', 'notes',
             'created_at', 'updated_at',
         ]
@@ -21,29 +23,29 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
         return obj.marked_by.full_name if obj.marked_by else None
 
     def get_course_title(self, obj):
-        return obj.course.title
+        return obj.course_offering.course.title if obj.course_offering and obj.course_offering.course else None
 
     def validate(self, attrs):
         request = self.context['request']
         teacher = request.user
-        course  = attrs.get('course') or (self.instance.course if self.instance else None)
+        course_offering = attrs.get('course_offering') or (self.instance.course_offering if self.instance else None)
         student = attrs.get('student') or (self.instance.student if self.instance else None)
 
-        # Teacher can only mark attendance for their own courses
-        if teacher.is_teacher and course and course.teacher != teacher:
+        # Teacher can only mark attendance for their own course offerings
+        if teacher.is_teacher and course_offering and course_offering.instructor != teacher:
             raise serializers.ValidationError(
-                {'course': 'You can only mark attendance for your own courses.'}
+                {'course_offering': 'You can only mark attendance for your own course offerings.'}
             )
 
-        # Student must be enrolled in the course
-        if student and course:
+        # Student must be enrolled in the course offering
+        if student and course_offering:
             from enrollments.models import Enrollment
             enrolled = Enrollment.objects.filter(
-                student=student, course=course, status__in=['active', 'completed']
+                student=student, course_offering=course_offering, status__in=['active', 'completed']
             ).exists()
             if not enrolled:
                 raise serializers.ValidationError(
-                    {'student': 'This student is not enrolled in the selected course.'}
+                    {'student': 'This student is not enrolled in the selected course offering.'}
                 )
 
         return attrs
@@ -55,7 +57,7 @@ class AttendanceRecordSerializer(serializers.ModelSerializer):
 
 class BulkAttendanceSerializer(serializers.Serializer):
     """Mark attendance for multiple students at once (one session)."""
-    course  = serializers.IntegerField()
+    course_offering = serializers.IntegerField()
     date    = serializers.DateField()
     records = serializers.ListField(
         child=serializers.DictField(),

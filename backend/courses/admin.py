@@ -1,17 +1,31 @@
-"""
-Courses admin — full course & lesson management with inline editing,
-thumbnail previews, publish actions, and enrollment stats.
-"""
 from django.contrib import admin
 from django.utils.html import format_html
-from django.db.models import Count, Sum, Avg
-from django.utils.safestring import mark_safe
-from .models import Course, Lesson
+from .models import Faculty, Department, Course, AcademicSemester, CourseOffering, Lesson
 
 
-# ---------------------------------------------------------------------------
-# Lesson inline
-# ---------------------------------------------------------------------------
+class FacultyAdmin(admin.ModelAdmin):
+    list_display = ['name', 'code', 'dean', 'created_at']
+    search_fields = ['name', 'code']
+
+
+class DepartmentAdmin(admin.ModelAdmin):
+    list_display = ['name', 'code', 'faculty', 'head', 'created_at']
+    list_filter = ['faculty']
+    search_fields = ['name', 'code']
+
+
+class AcademicSemesterAdmin(admin.ModelAdmin):
+    list_display = ['year', 'semester', 'is_active', 'registration_start', 'registration_end']
+    list_filter = ['is_active']
+    search_fields = ['semester']
+
+
+class CourseOfferingAdmin(admin.ModelAdmin):
+    list_display = ['course', 'semester', 'instructor', 'section_code', 'max_capacity']
+    list_filter = ['semester', 'section_code']
+    search_fields = ['course__title', 'instructor__email']
+
+
 class LessonInline(admin.TabularInline):
     model    = Lesson
     extra    = 0
@@ -20,21 +34,18 @@ class LessonInline(admin.TabularInline):
     show_change_link = True
 
 
-# ---------------------------------------------------------------------------
-# Course
-# ---------------------------------------------------------------------------
 class CourseAdmin(admin.ModelAdmin):
     list_display = [
-        'thumbnail_tag', 'title', 'teacher_link', 'category',
+        'thumbnail_tag', 'title', 'department_link', 'category',
         'status_badge', 'premium_badge', 'price',
-        'lesson_count_col', 'enrolled_count_col', 'created_at',
+        'lesson_count_col', 'created_at',
     ]
     list_display_links = ['thumbnail_tag', 'title']
     list_filter   = ['status', 'is_premium', 'category', 'created_at']
-    search_fields = ['title', 'description', 'teacher__email', 'teacher__first_name']
+    search_fields = ['title', 'description']
     prepopulated_fields = {'slug': ('title',)}
-    readonly_fields     = ['thumbnail_tag', 'created_at', 'updated_at', 'enrolled_count_col', 'lesson_count_col']
-    raw_id_fields       = ['teacher', 'created_by']
+    readonly_fields     = ['thumbnail_tag', 'created_at', 'updated_at', 'lesson_count_col']
+    raw_id_fields       = ['department', 'created_by']
     inlines             = [LessonInline]
     list_per_page       = 20
     date_hierarchy      = 'created_at'
@@ -49,7 +60,7 @@ class CourseAdmin(admin.ModelAdmin):
             'fields': ('thumbnail_tag', 'thumbnail'),
         }),
         ('Ownership', {
-            'fields': ('teacher', 'created_by'),
+            'fields': ('department', 'created_by'),
         }),
         ('Pricing & Access', {
             'fields': ('is_premium', 'price', 'status', 'locked'),
@@ -61,10 +72,7 @@ class CourseAdmin(admin.ModelAdmin):
     )
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related('teacher').annotate(
-            _lesson_count=Count('lessons', distinct=True),
-            _enrolled_count=Count('enrollments', filter=Count('enrollments__status'), distinct=True),
-        )
+        return super().get_queryset(request).select_related('department')
 
     @admin.display(description='')
     def thumbnail_tag(self, obj):
@@ -83,12 +91,14 @@ class CourseAdmin(admin.ModelAdmin):
             'font-size:18px;">📚</div>'
         )
 
-    @admin.display(description='Teacher')
-    def teacher_link(self, obj):
-        return format_html(
-            '<a href="/admin/users/user/{}/change/">{}</a>',
-            obj.teacher_id, obj.teacher.full_name
-        )
+    @admin.display(description='Department')
+    def department_link(self, obj):
+        if obj.department:
+            return format_html(
+                '<a href="/admin/courses/department/{}/change/">{}</a>',
+                obj.department_id, obj.department.name
+            )
+        return '—'
 
     @admin.display(description='Status')
     def status_badge(self, obj):
@@ -113,11 +123,6 @@ class CourseAdmin(admin.ModelAdmin):
     def lesson_count_col(self, obj):
         return obj.lessons.count()
 
-    @admin.display(description='Enrolled')
-    def enrolled_count_col(self, obj):
-        return obj.enrollments.filter(status='active').count()
-
-    # ── Actions ──────────────────────────────────────────────────────────
     @admin.action(description='● Publish selected courses')
     def publish_courses(self, request, queryset):
         updated = queryset.update(status=Course.Status.PUBLISHED)
@@ -134,9 +139,6 @@ class CourseAdmin(admin.ModelAdmin):
         self.message_user(request, f'{updated} course(s) archived.')
 
 
-# ---------------------------------------------------------------------------
-# Lesson
-# ---------------------------------------------------------------------------
 class LessonAdmin(admin.ModelAdmin):
     list_display  = ['title', 'course_link', 'order', 'status_badge', 'duration_min', 'has_video']
     list_filter   = ['status', 'course__category', 'course__status']

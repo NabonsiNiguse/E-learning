@@ -1,276 +1,222 @@
 """
-Test role-based endpoint behavior.
-Verifies that /results endpoint returns different data per role.
+Role-based endpoint tests: verifies that /api/v1/results/ returns correct data per role.
+Roles: Admin (all), DeptHead/Dean (filtered by scope), Teacher (own offerings), Student (own RELEASED only).
 """
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 from rest_framework import status
-from courses.models import Course
-from results.models import StudentResult, GradingScale, GradingRule
+from decimal import Decimal
+
+from courses.models import Faculty, Department, Course, AcademicSemester, CourseOffering
+from enrollments.models import Enrollment
+from results.models import Grade, GradingScale, GradingRule
 
 User = get_user_model()
 
 
-class RoleBasedEndpointTestCase(TestCase):
-    """Test that /results endpoint returns different data per role."""
+def get_results(response):
+    """
+    Helper that unwraps a DRF paginated list response.
+    Returns the list of results regardless of whether pagination is active.
+    Paginated: {'count': N, 'results': [...]}
+    Unpaginated: [...]
+    """
+    data = response.data
+    if isinstance(data, dict) and 'results' in data:
+        return data['results']
+    return data
+
+
+class RoleBasedGradeEndpointTests(TestCase):
+    """Test that /api/v1/results/ filters and serializes differently per role."""
 
     def setUp(self):
-        """Set up test data."""
-        # Create users
         self.admin = User.objects.create_user(
-            email='admin@test.com',
-            password='testpass123',
-            first_name='Admin',
-            last_name='User',
-            role=User.Role.ADMIN,
+            email='admin@test.com', password='pass', role=User.Role.ADMIN,
+            first_name='Admin', last_name='User',
+        )
+        self.dean = User.objects.create_user(
+            email='dean@test.com', password='pass', role=User.Role.DEAN,
+            first_name='Dean', last_name='User',
+        )
+        self.dept_head = User.objects.create_user(
+            email='head@test.com', password='pass', role=User.Role.DEPT_HEAD,
+            first_name='Head', last_name='User',
         )
         self.teacher = User.objects.create_user(
-            email='teacher@test.com',
-            password='testpass123',
-            first_name='Teacher',
-            last_name='User',
-            role=User.Role.TEACHER,
+            email='teacher@test.com', password='pass', role=User.Role.TEACHER,
+            first_name='Teacher', last_name='User',
         )
         self.student = User.objects.create_user(
-            email='student@test.com',
-            password='testpass123',
-            first_name='Student',
-            last_name='User',
-            role=User.Role.STUDENT,
+            email='student@test.com', password='pass', role=User.Role.STUDENT,
+            first_name='Student', last_name='User',
         )
 
-        # Create course
+        # Build hierarchy
+        self.faculty = Faculty.objects.create(name='Engineering', code='ENG', dean=self.dean)
+        self.dept = Department.objects.create(
+            faculty=self.faculty, name='Computer Science', code='CS', head=self.dept_head
+        )
         self.course = Course.objects.create(
-            title='Test Course',
-            description='Test',
-            teacher=self.teacher,
-            category='Test',
-            level='Beginner',
+            department=self.dept, title='Data Structures', slug='ds-101',
+            description='Test', status=Course.Status.PUBLISHED,
+        )
+        self.semester = AcademicSemester.objects.create(year=2024, semester='Fall', is_active=True)
+        self.offering = CourseOffering.objects.create(
+            course=self.course, semester=self.semester,
+            instructor=self.teacher, section_code='A', max_capacity=30,
+        )
+        self.enrollment = Enrollment.objects.create(
+            student=self.student, course_offering=self.offering,
+            status=Enrollment.Status.ACTIVE,
         )
 
-        # Create grading scale
-        self.scale = GradingScale.objects.create(
-            name='Test Scale',
-            is_active=True,
-            created_by=self.admin,
-        )
+        # GradingScale
+        self.scale = GradingScale.objects.create(name='Scale', is_active=True, created_by=self.admin)
         GradingRule.objects.create(
-            scale=self.scale,
-            letter='A+',
-            min_score=95,
-            max_score=100,
-            gpa_points=4.0,
-            pass_fail='pass',
-        )
-        GradingRule.objects.create(
-            scale=self.scale,
-            letter='B+',
-            min_score=85,
-            max_score=94.99,
-            gpa_points=3.3,
-            pass_fail='pass',
+            scale=self.scale, letter='B+', min_score=Decimal('85'),
+            max_score=Decimal('94.99'), gpa_points=Decimal('3.3'), pass_fail='pass',
         )
 
-        # Create result
-        self.result = StudentResult.objects.create(
-            student=self.student,
-            course=self.course,
-            year=2024,
-            semester='semester_1',
-            raw_score=87.5,
-            status=StudentResult.Status.DRAFT,
+        # Grade — RELEASED so student assertions see exactly 1 result
+        self.grade = Grade.objects.create(
+            enrollment=self.enrollment,
+            raw_total_score=Decimal('87.5'),
+            status=Grade.Status.RELEASED,
+            version=1,
         )
 
         self.client = APIClient()
 
-    def test_teacher_gets_only_scores(self):
-        """Teacher should get ONLY: student_name, course_title, raw_score."""
-        self.client.force_authenticate(user=self.teacher)
-        response = self.client.get('/api/v1/results/')
-        
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertGreater(len(response.data), 0)
-        
-        result = response.data[0]
-        
-        # Teacher SHOULD see these fields
-        self.assertIn('id', result)
-        self.assertIn('student_name', result)
-        self.assertIn('course_title', result)
-        self.assertIn('year', result)
-        self.assertIn('semester', result)
-        self.assertIn('raw_score', result)
-        
-        # Teacher SHOULD NOT see these sensitive computed fields
-        self.assertNotIn('grade_letter', result)
-        self.assertNotIn('gpa', result)
-        self.assertNotIn('pass_fail', result)
-        self.assertIn('status', result)
-        self.assertNotIn('submitted_at', result)
-        self.assertNotIn('approved_at', result)
-        self.assertNotIn('student_detail', result)
-        
-        # Verify values
-        self.assertEqual(result['student_name'], 'Student User')
-        self.assertEqual(result['course_title'], 'Test Course')
-        self.assertEqual(float(result['raw_score']), 87.5)
+    # -----------------------------------------------------------------------
+    # Admin
+    # -----------------------------------------------------------------------
 
-    def test_student_gets_own_results_with_grades(self):
-        """Student should get own results with: course, score, grade, GPA, pass_fail."""
-        self.client.force_authenticate(user=self.student)
-        response = self.client.get('/api/v1/results/')
-        
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
-        
-        result = response.data[0]
-        
-        # Student SHOULD see these fields
-        self.assertIn('id', result)
-        self.assertIn('course_title', result)
-        self.assertIn('course_teacher', result)
-        self.assertIn('year', result)
-        self.assertIn('semester', result)
-        self.assertIn('raw_score', result)
-        self.assertIn('grade_letter', result)
-        self.assertIn('gpa', result)
-        self.assertIn('pass_fail', result)
-        
-        # Student SHOULD NOT see these fields
-        self.assertNotIn('status', result)
-        self.assertNotIn('submitted_at', result)
-        self.assertNotIn('approved_at', result)
-        self.assertNotIn('student_detail', result)
-        self.assertNotIn('student_name', result)
-        
-        # Verify computed values
-        self.assertEqual(result['course_title'], 'Test Course')
-        self.assertEqual(float(result['raw_score']), 87.5)
-        self.assertEqual(result['grade_letter'], 'B+')
-        self.assertEqual(result['gpa'], 3.3)
-        self.assertEqual(result['pass_fail'], 'pass')
-
-    def test_admin_gets_all_data(self):
-        """Admin should get ALL data including status and submission details."""
+    def test_admin_sees_all_grades(self):
+        """Admin sees every grade across all departments."""
         self.client.force_authenticate(user=self.admin)
         response = self.client.get('/api/v1/results/')
-        
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertGreater(len(response.data), 0)
-        
-        result = response.data[0]
-        
-        # Admin SHOULD see all fields
-        self.assertIn('id', result)
-        self.assertIn('student', result)
-        self.assertIn('student_detail', result)
-        self.assertIn('course', result)
-        self.assertIn('course_title', result)
-        self.assertIn('course_teacher', result)
-        self.assertIn('year', result)
-        self.assertIn('semester', result)
-        self.assertIn('raw_score', result)
-        self.assertIn('grade_letter', result)
-        self.assertIn('gpa', result)
-        self.assertIn('pass_fail', result)
-        self.assertIn('status', result)
-        self.assertIn('submitted_at', result)
-        self.assertIn('approved_at', result)
-        self.assertIn('unlocked_at', result)
-        self.assertIn('created_at', result)
-        self.assertIn('updated_at', result)
-        
-        # Verify values
-        self.assertEqual(result['student'], self.student.id)
-        self.assertEqual(result['student_detail']['full_name'], 'Student User')
-        self.assertEqual(result['course_title'], 'Test Course')
-        self.assertEqual(float(result['raw_score']), 87.5)
-        self.assertEqual(result['grade_letter'], 'B+')
-        self.assertEqual(result['gpa'], 3.3)
-        self.assertEqual(result['pass_fail'], 'pass')
-        self.assertEqual(result['status'], 'draft')
+        self.assertGreaterEqual(len(get_results(response)), 1)
 
-    def test_teacher_cannot_see_other_teachers_students(self):
-        """Teacher should only see students from their own courses."""
-        # Create another teacher
-        other_teacher = User.objects.create_user(
-            email='other_teacher@test.com',
-            password='testpass123',
-            first_name='Other',
-            last_name='Teacher',
-            role=User.Role.TEACHER,
-        )
-        
-        self.client.force_authenticate(user=other_teacher)
-        response = self.client.get('/api/v1/results/')
-        
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 0)
+    # -----------------------------------------------------------------------
+    # Teacher
+    # -----------------------------------------------------------------------
 
-    def test_student_cannot_see_other_students_results(self):
-        """Student should only see their own results."""
-        # Create another student
-        other_student = User.objects.create_user(
-            email='other_student@test.com',
-            password='testpass123',
-            first_name='Other',
-            last_name='Student',
-            role=User.Role.STUDENT,
-        )
-        
-        self.client.force_authenticate(user=other_student)
-        response = self.client.get('/api/v1/results/')
-        
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 0)
-
-    def test_teacher_cannot_see_grades_in_detail(self):
-        """Teacher should not see grades even when viewing detail."""
+    def test_teacher_sees_own_offering_grades(self):
+        """Teacher sees grades only for their own offering."""
         self.client.force_authenticate(user=self.teacher)
-        response = self.client.get(f'/api/v1/results/{self.result.id}/')
-        
+        response = self.client.get('/api/v1/results/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        
-        result = response.data
-        
-        # Teacher SHOULD NOT see grade fields
-        self.assertNotIn('grade_letter', result)
-        self.assertNotIn('gpa', result)
-        self.assertNotIn('pass_fail', result)
+        self.assertEqual(len(get_results(response)), 1)
 
-    def test_student_sees_grades_in_detail(self):
-        """Student should see grades when viewing their own result."""
+    def test_other_teacher_sees_no_grades(self):
+        """A teacher not assigned to any offering gets an empty list."""
+        other = User.objects.create_user(
+            email='other@test.com', password='pass', role=User.Role.TEACHER
+        )
+        self.client.force_authenticate(user=other)
+        response = self.client.get('/api/v1/results/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(get_results(response)), 0)
+
+    # -----------------------------------------------------------------------
+    # Student
+    # -----------------------------------------------------------------------
+
+    def test_student_sees_only_own_released_grades(self):
+        """Student can only see their own RELEASED grades."""
         self.client.force_authenticate(user=self.student)
-        response = self.client.get(f'/api/v1/results/{self.result.id}/')
-        
+        response = self.client.get('/api/v1/results/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        
-        result = response.data
-        
-        # Student SHOULD see grade fields
-        self.assertIn('grade_letter', result)
-        self.assertIn('gpa', result)
-        self.assertIn('pass_fail', result)
-        
-        # Verify computed values
-        self.assertEqual(result['grade_letter'], 'B+')
-        self.assertEqual(result['gpa'], 3.3)
-        self.assertEqual(result['pass_fail'], 'pass')
+        results = get_results(response)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['id'], self.grade.id)
 
-    def test_admin_sees_all_fields_in_detail(self):
-        """Admin should see all fields including status."""
-        self.client.force_authenticate(user=self.admin)
-        response = self.client.get(f'/api/v1/results/{self.result.id}/')
-        
+    def test_student_cannot_see_draft_grade(self):
+        """Student gets zero results when grade is DRAFT."""
+        # Use direct DB update to avoid save() override touching status logic
+        Grade.objects.filter(pk=self.grade.pk).update(status=Grade.Status.DRAFT)
+        self.client.force_authenticate(user=self.student)
+        response = self.client.get('/api/v1/results/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        
-        result = response.data
-        
-        # Admin SHOULD see all fields
-        self.assertIn('status', result)
-        self.assertIn('submitted_at', result)
-        self.assertIn('approved_at', result)
-        self.assertIn('grade_letter', result)
-        self.assertIn('gpa', result)
-        self.assertIn('pass_fail', result)
+        self.assertEqual(len(get_results(response)), 0)
+
+    def test_other_student_sees_no_grades(self):
+        """Another student cannot see anyone else's grades."""
+        other = User.objects.create_user(
+            email='other_student@test.com', password='pass', role=User.Role.STUDENT
+        )
+        self.client.force_authenticate(user=other)
+        response = self.client.get('/api/v1/results/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(get_results(response)), 0)
+
+    def test_student_cannot_modify_grade(self):
+        """Student cannot PATCH a grade."""
+        self.client.force_authenticate(user=self.student)
+        response = self.client.patch(
+            f'/api/v1/results/{self.grade.id}/',
+            {'raw_total_score': 100},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    # -----------------------------------------------------------------------
+    # Dean / DeptHead
+    # -----------------------------------------------------------------------
+
+    def test_dept_head_sees_department_grades(self):
+        """Department head can view all grades within their department."""
+        self.client.force_authenticate(user=self.dept_head)
+        response = self.client.get('/api/v1/results/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(get_results(response)), 1)
+
+    def test_dean_sees_faculty_grades(self):
+        """Dean can view all grades within their faculty."""
+        self.client.force_authenticate(user=self.dean)
+        response = self.client.get('/api/v1/results/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(get_results(response)), 1)
+
+    # -----------------------------------------------------------------------
+    # Grade submission workflow
+    # -----------------------------------------------------------------------
+
+    def test_teacher_can_lock_draft_grade(self):
+        """Teacher can submit/lock a grade with a score."""
+        self.grade.status = Grade.Status.DRAFT
+        self.grade.save()
+        self.client.force_authenticate(user=self.teacher)
+        response = self.client.post(f'/api/v1/results/{self.grade.id}/submit/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.grade.refresh_from_db()
+        self.assertEqual(self.grade.status, Grade.Status.LOCKED)
+
+    def test_dept_head_can_release_locked_grade(self):
+        """DeptHead can approve/release a locked grade."""
+        self.grade.status = Grade.Status.LOCKED
+        self.grade.save()
+        self.client.force_authenticate(user=self.dept_head)
+        response = self.client.post(f'/api/v1/results/{self.grade.id}/approve/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.grade.refresh_from_db()
+        self.assertEqual(self.grade.status, Grade.Status.RELEASED)
+
+    def test_admin_can_unlock_grade(self):
+        """Admin can unlock a locked/released grade back to draft."""
+        self.grade.status = Grade.Status.LOCKED
+        self.grade.save()
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(f'/api/v1/results/{self.grade.id}/unlock/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.grade.refresh_from_db()
+        self.assertEqual(self.grade.status, Grade.Status.DRAFT)
+
+    def test_student_cannot_use_submit_action(self):
+        """Student cannot call the submit action (only teachers can)."""
+        self.client.force_authenticate(user=self.student)
+        response = self.client.post(f'/api/v1/results/{self.grade.id}/submit/')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

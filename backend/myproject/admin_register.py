@@ -1,7 +1,3 @@
-"""
-Registers all models with the custom Learnly admin site.
-Imported once from urls.py.
-"""
 from myproject.admin_site import admin_site
 
 # ── Users ──────────────────────────────────────────────────────────────────
@@ -13,11 +9,15 @@ admin_site.register(TeacherProfile, TeacherProfileAdmin)
 admin_site.register(StudentProfile, StudentProfileAdmin)
 
 # ── Courses ────────────────────────────────────────────────────────────────
-from courses.models import Course, Lesson
-from courses.admin import CourseAdmin, LessonAdmin
+from courses.models import Faculty, Department, AcademicSemester, CourseOffering, Course, Lesson
+from courses.admin import FacultyAdmin, DepartmentAdmin, AcademicSemesterAdmin, CourseOfferingAdmin, CourseAdmin, LessonAdmin
 
-admin_site.register(Course, CourseAdmin)
-admin_site.register(Lesson, LessonAdmin)
+admin_site.register(Faculty,          FacultyAdmin)
+admin_site.register(Department,       DepartmentAdmin)
+admin_site.register(AcademicSemester, AcademicSemesterAdmin)
+admin_site.register(CourseOffering,   CourseOfferingAdmin)
+admin_site.register(Course,           CourseAdmin)
+admin_site.register(Lesson,           LessonAdmin)
 
 # ── Enrollments ────────────────────────────────────────────────────────────
 from enrollments.models import Enrollment
@@ -44,19 +44,21 @@ from attendance.admin import AttendanceRecordAdmin
 
 admin_site.register(AttendanceRecord, AttendanceRecordAdmin)
 
-# ── Results (includes GradeAppeal, GradingScale, StudentResult, AuditLog) ──
-from results.models import GradingScale, GradingRule, StudentResult, ResultAuditLog, GradeAppeal
+# ── Results ────────────────────────────────────────────────────────────────
+from results.models import GradingScale, AssessmentTemplate, AssessmentScore, Grade, AcademicAuditLog, GradeAppeal
 from results.admin import (
-    GradingScaleAdmin, StudentResultAdmin,
-    ResultAuditLogAdmin, GradeAppealAdmin,
+    GradingScaleAdmin, AssessmentTemplateAdmin, AssessmentScoreAdmin,
+    GradeAdmin, AcademicAuditLogAdmin, GradeAppealAdmin,
 )
 
-admin_site.register(GradingScale,   GradingScaleAdmin)
-admin_site.register(StudentResult,  StudentResultAdmin)
-admin_site.register(ResultAuditLog, ResultAuditLogAdmin)
-admin_site.register(GradeAppeal,    GradeAppealAdmin)
+admin_site.register(GradingScale,       GradingScaleAdmin)
+admin_site.register(AssessmentTemplate, AssessmentTemplateAdmin)
+admin_site.register(AssessmentScore,    AssessmentScoreAdmin)
+admin_site.register(Grade,             GradeAdmin)
+admin_site.register(AcademicAuditLog,   AcademicAuditLogAdmin)
+admin_site.register(GradeAppeal,        GradeAppealAdmin)
 
-# ── GradeCorrection (grading app — standalone model, no db_table conflict) ─
+# ── GradeCorrection (grading app) ─
 from grading.models import GradeCorrection
 from grading.admin import GradeCorrectionAdmin
 

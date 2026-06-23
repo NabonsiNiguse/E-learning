@@ -24,13 +24,15 @@ class User(AbstractBaseUser, PermissionsMixin):
     class Role(models.TextChoices):
         SUPER_ADMIN = 'super_admin', 'Super Admin'
         ADMIN       = 'admin',       'Admin'
+        DEAN        = 'dean',        'Faculty Dean'
+        DEPT_HEAD   = 'dept_head',   'Department Head'
         TEACHER     = 'teacher',     'Teacher'
         STUDENT     = 'student',     'Student'
 
     email      = models.EmailField(unique=True)
     first_name = models.CharField(max_length=100)
     last_name  = models.CharField(max_length=100)
-    role       = models.CharField(max_length=11, choices=Role.choices, default=Role.STUDENT)
+    role       = models.CharField(max_length=15, choices=Role.choices, default=Role.STUDENT)
     is_active  = models.BooleanField(default=True)
     is_staff   = models.BooleanField(default=False)
     avatar     = models.ImageField(upload_to='avatars/', null=True, blank=True)
@@ -65,6 +67,14 @@ class User(AbstractBaseUser, PermissionsMixin):
     def is_admin_only(self):
         """True only for plain Admin, not Super Admin."""
         return self.role == self.Role.ADMIN
+
+    @property
+    def is_dean(self):
+        return self.role == self.Role.DEAN
+
+    @property
+    def is_dept_head(self):
+        return self.role == self.Role.DEPT_HEAD
 
     @property
     def is_teacher(self):

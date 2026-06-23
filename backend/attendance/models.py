@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from courses.models import CourseOffering
 
 
 class AttendanceRecord(models.Model):
@@ -15,10 +16,11 @@ class AttendanceRecord(models.Model):
         related_name='attendance_records',
         limit_choices_to={'role': 'student'},
     )
-    course     = models.ForeignKey(
-        'courses.Course',
+    course_offering = models.ForeignKey(
+        CourseOffering,
         on_delete=models.CASCADE,
         related_name='attendance_records',
+        null=True,
     )
     marked_by  = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -35,8 +37,8 @@ class AttendanceRecord(models.Model):
 
     class Meta:
         db_table        = 'attendance_records'
-        unique_together = [('student', 'course', 'date')]  # one record per student per course per day
+        unique_together = [('student', 'course_offering', 'date')]
         ordering        = ['-date', 'student__first_name']
 
     def __str__(self):
-        return f'{self.student.email} | {self.course.title} | {self.date} | {self.status}'
+        return f'{self.student.email} | {self.course_offering} | {self.date} | {self.status}'

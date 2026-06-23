@@ -3,74 +3,59 @@ from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 class IsTeacherOwnerOrAdmin(BasePermission):
     """
-    View-level: any authenticated user passes has_permission.
-    Object-level rules:
-
-    WRITE (POST/PUT/PATCH/DELETE):
-        - Admin: always allowed
-        - Teacher: only if they own the course/lesson
-        - Student: never
-
-    READ (GET/HEAD/OPTIONS):
-        - Admin: always allowed
-        - Teacher: only their own courses/lessons
-        - Student: course must be published (no enrollment gate here —
-          enrollment is enforced at the lesson level, not course detail)
+    Object-level permissions:
+    - Admin: full access.
+    - Faculty Dean: read/write if the course belongs to a department under their faculty.
+    - Department Head: read/write if the course belongs to their department.
+    - Teacher: read/write if they teach any offering of the course.
+    - Student: read safe methods if published.
     """
-
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated)
 
     def has_object_permission(self, request, view, obj):
         user = request.user
-
-        # Resolve the owning course regardless of whether obj is Course or Lesson
-        if hasattr(obj, 'teacher'):
-            course = obj          # obj is a Course
+        
+        # Resolve Course
+        if hasattr(obj, 'department'):
+            course = obj
         elif hasattr(obj, 'course'):
-            course = obj.course   # obj is a Lesson
+            course = obj.course
         else:
             return False
 
-        # ── Write operations ──────────────────────────────────────────────
-        if request.method not in SAFE_METHODS:
-            if user.is_admin:
-                return True
-            if user.is_teacher:
-                return course.teacher == user
-            return False  # students cannot write
-
-        # ── Read operations ───────────────────────────────────────────────
-        if user.is_admin:
+        if user.is_super_admin or user.is_admin_only:
             return True
 
+        if user.is_dean:
+            return course.department and course.department.faculty.dean == user
+
+        if user.is_dept_head:
+            return course.department and course.department.head == user
+
         if user.is_teacher:
-            return course.teacher == user
+            return course.offerings.filter(instructor=user).exists()
 
         if user.is_student:
-            # Students can read any published course detail (to browse/decide to enroll).
-            # Lesson-level access is gated separately in LessonListCreateView.get_queryset.
-            return course.status == 'published'
+            return request.method in SAFE_METHODS and course.status == 'published'
 
         return False
 
 
 class IsPublishActionAllowed(BasePermission):
     """
-    Guards the dedicated publish/unpublish endpoint.
-    - Admin: always allowed
-    - Teacher: only for their own course
-    - Student: never
+    Guards the publish endpoint.
+    Admin, Dean (own faculty), Head (own department) can publish.
     """
-
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated
-                    and not request.user.is_student)
+        return bool(request.user and request.user.is_authenticated and not request.user.is_student)
 
     def has_object_permission(self, request, view, obj):
         user = request.user
-        if user.is_admin:
+        if user.is_super_admin or user.is_admin_only:
             return True
-        if user.is_teacher:
-            return obj.teacher == user
+        if user.is_dean:
+            return obj.department and obj.department.faculty.dean == user
+        if user.is_dept_head:
+            return obj.department and obj.department.head == user
         return False

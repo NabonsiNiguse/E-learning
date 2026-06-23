@@ -1,23 +1,17 @@
-"""
-Results serializers — STRICT role-based field exposure.
-
-Key rules:
-  - Teachers: ONLY see student name, course, assignment/quiz/attendance/progress scores
-  - Teachers: NEVER see final score, grade, GPA, or status
-  - Students: ONLY see their own data with final score, grade, GPA, pass/fail
-  - Admin: FULL data including all scores, grades, GPA, status
-  - Score validated 0–100 on write.
-  - Grades NEVER stored, always computed in backend.
-"""
 from rest_framework import serializers
-from rest_framework.exceptions import PermissionDenied
-from .models import StudentResult, GradingScale, GradingRule, GradeAppeal, ResultAuditLog
+from rest_framework.exceptions import PermissionDenied, APIException
+from rest_framework import status
+from django.db import transaction
+from .models import Grade, AssessmentTemplate, AssessmentScore, GradingScale, GradingRule, GradeAppeal, AcademicAuditLog
 from users.serializers import UserListSerializer
 
 
-# ---------------------------------------------------------------------------
-# Grading Scale
-# ---------------------------------------------------------------------------
+class ConcurrencyConflictException(APIException):
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = 'This record was modified by another user. Please reload and try again.'
+    default_code = 'concurrency_conflict'
+
+
 class GradingRuleSerializer(serializers.ModelSerializer):
     class Meta:
         model  = GradingRule
@@ -35,7 +29,6 @@ class GradingScaleSerializer(serializers.ModelSerializer):
 
 
 class GradingScaleWriteSerializer(serializers.ModelSerializer):
-    """Used for create/update — accepts rules as nested input."""
     rules = GradingRuleSerializer(many=True)
 
     class Meta:
@@ -72,173 +65,75 @@ class GradingScaleWriteSerializer(serializers.ModelSerializer):
         return instance
 
 
-# ---------------------------------------------------------------------------
-# Audit Log
-# ---------------------------------------------------------------------------
-class AuditLogSerializer(serializers.ModelSerializer):
-    performed_by_detail = UserListSerializer(source='performed_by', read_only=True)
+class AssessmentTemplateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AssessmentTemplate
+        fields = ['id', 'course_offering', 'name', 'max_score', 'weight_percentage']
+
+
+class AssessmentScoreSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source='enrollment.student.full_name', read_only=True)
+    student_email = serializers.CharField(source='enrollment.student.email', read_only=True)
+    template_name = serializers.CharField(source='template.name', read_only=True)
 
     class Meta:
-        model  = ResultAuditLog
+        model = AssessmentScore
         fields = [
-            'id', 'action', 'performed_by', 'performed_by_detail',
-            'performed_by_role', 'old_value', 'new_value', 'note', 'timestamp',
+            'id', 'enrollment', 'student_name', 'student_email',
+            'template', 'template_name', 'score_obtained', 'version',
+            'graded_by', 'graded_at'
         ]
+        read_only_fields = ['id', 'enrollment', 'student_name', 'student_email', 'template', 'template_name', 'graded_by', 'graded_at']
 
 
-# ---------------------------------------------------------------------------
-# TEACHER SERIALIZER — STRICT: Only student name, course, component scores
-# ---------------------------------------------------------------------------
-class TeacherResultSerializer(serializers.ModelSerializer):
-    """
-    TEACHER VIEW: Minimal data for score entry.
-    - Student name only
-    - Course title only
-    - Raw score (editable)
-    - NO grade, NO GPA, NO final score, NO status
-    """
-    student_name = serializers.CharField(source='student.full_name', read_only=True)
-    course_title = serializers.CharField(source='course.title', read_only=True)
+class AssessmentScoreWriteSerializer(serializers.ModelSerializer):
+    version = serializers.IntegerField(required=True)
 
     class Meta:
-        model  = StudentResult
-        fields = [
-            'id',
-            'student_name',
-            'course_title',
-            'year', 'semester',
-            'raw_score',  # Editable
-            'status',
-        ]
-        read_only_fields = ['id', 'student_name', 'course_title', 'year', 'semester', 'status']
+        model = AssessmentScore
+        fields = ['score_obtained', 'version']
 
-
-class TeacherScoreWriteSerializer(serializers.ModelSerializer):
-    """
-    Teachers can ONLY set raw_score.
-    Grade, GPA, pass_fail are computed — not accepted as input.
-    """
-    class Meta:
-        model  = StudentResult
-        fields = ['raw_score']
-
-    def validate_raw_score(self, value):
-        if value is None:
-            return value
-        if not (0 <= float(value) <= 100):
-            raise serializers.ValidationError('Score must be between 0 and 100.')
+    def validate_score_obtained(self, value):
+        if value is not None and value < 0:
+            raise serializers.ValidationError("Score obtained cannot be negative.")
         return value
 
-    def validate(self, attrs):
-        return attrs
 
+class GradeSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source='enrollment.student.full_name', read_only=True)
+    student_email = serializers.CharField(source='enrollment.student.email', read_only=True)
+    course_title = serializers.CharField(source='enrollment.course_offering.course.title', read_only=True)
+    semester = serializers.CharField(source='enrollment.course_offering.semester', read_only=True)
 
-# ---------------------------------------------------------------------------
-# STUDENT SERIALIZER — STRICT: Only own data with final score, grade, GPA
-# ---------------------------------------------------------------------------
-class StudentResultSerializer(serializers.ModelSerializer):
-    """
-    STUDENT VIEW: Own results only with computed grades.
-    - Course title
-    - Final score (raw_score)
-    - Grade letter (computed)
-    - GPA (computed)
-    - Pass/fail (computed)
-    - NO status, NO submission details
-    """
-    course_title = serializers.CharField(source='course.title', read_only=True)
-    course_teacher = serializers.CharField(source='course.teacher.full_name', read_only=True)
-
-    # Computed from GradingScale — never stored
-    grade_letter = serializers.SerializerMethodField()
-    gpa = serializers.SerializerMethodField()
+    # Computed fields
+    grade_letter = serializers.CharField(read_only=True)
+    gpa_points = serializers.DecimalField(max_digits=3, decimal_places=2, read_only=True)
     pass_fail = serializers.SerializerMethodField()
 
     class Meta:
-        model  = StudentResult
+        model = Grade
         fields = [
-            'id',
-            'course_title',
-            'course_teacher',
-            'year', 'semester',
-            'raw_score',  # Final score
-            'grade_letter',
-            'gpa',
-            'pass_fail',
+            'id', 'enrollment', 'student_name', 'student_email',
+            'course_title', 'semester', 'raw_total_score', 'grade_letter',
+            'gpa_points', 'pass_fail', 'status', 'version', 'updated_at'
         ]
-        read_only_fields = fields
-
-    def get_grade_letter(self, obj):
-        computed = obj.compute_grade()
-        return computed['letter'] if computed else None
-
-    def get_gpa(self, obj):
-        computed = obj.compute_grade()
-        return computed['gpa'] if computed else None
+        read_only_fields = [
+            'id', 'enrollment', 'student_name', 'student_email',
+            'course_title', 'semester', 'grade_letter', 'gpa_points',
+            'pass_fail', 'status', 'version', 'updated_at'
+        ]
 
     def get_pass_fail(self, obj):
         computed = obj.compute_grade()
         return computed['pass_fail'] if computed else None
 
 
-# ---------------------------------------------------------------------------
-# ADMIN SERIALIZER — FULL: All data including status, audit info
-# ---------------------------------------------------------------------------
-class AdminResultSerializer(serializers.ModelSerializer):
-    """
-    ADMIN VIEW: Full data for management.
-    - Student details
-    - Course details
-    - Raw score
-    - Grade (computed)
-    - GPA (computed)
-    - Pass/fail (computed)
-    - Status and submission details
-    """
-    student_detail = UserListSerializer(source='student', read_only=True)
-    course_title = serializers.CharField(source='course.title', read_only=True)
-    course_teacher = serializers.CharField(source='course.teacher.full_name', read_only=True)
-
-    # Computed from GradingScale
-    grade_letter = serializers.SerializerMethodField()
-    gpa = serializers.SerializerMethodField()
-    pass_fail = serializers.SerializerMethodField()
+class GradeWriteSerializer(serializers.ModelSerializer):
+    version = serializers.IntegerField(required=True)
 
     class Meta:
-        model  = StudentResult
-        fields = [
-            'id',
-            'student', 'student_detail',
-            'course', 'course_title', 'course_teacher',
-            'year', 'semester',
-            'raw_score',
-            'grade_letter', 'gpa', 'pass_fail',
-            'status',
-            'submitted_at', 'submitted_by',
-            'approved_at', 'approved_by',
-            'unlocked_at', 'unlocked_by',
-            'created_at', 'updated_at',
-        ]
-        read_only_fields = fields
-
-    def get_grade_letter(self, obj):
-        computed = obj.compute_grade()
-        return computed['letter'] if computed else None
-
-    def get_gpa(self, obj):
-        computed = obj.compute_grade()
-        return computed['gpa'] if computed else None
-
-    def get_pass_fail(self, obj):
-        computed = obj.compute_grade()
-        return computed['pass_fail'] if computed else None
-
-
-class AdminResultWriteSerializer(serializers.ModelSerializer):
-    """Admin can edit raw_score and status."""
-    class Meta:
-        model  = StudentResult
-        fields = ['raw_score', 'status']
+        model = Grade
+        fields = ['raw_total_score', 'status', 'version']
 
     def validate_raw_score(self, value):
         if value is not None and not (0 <= float(value) <= 100):
@@ -246,19 +141,28 @@ class AdminResultWriteSerializer(serializers.ModelSerializer):
         return value
 
 
-# ---------------------------------------------------------------------------
-# Grade Appeal
-# ---------------------------------------------------------------------------
+class AuditLogSerializer(serializers.ModelSerializer):
+    performed_by_detail = UserListSerializer(source='changed_by', read_only=True)
+
+    class Meta:
+        model  = AcademicAuditLog
+        fields = [
+            'id', 'table_name', 'record_id', 'action',
+            'old_value', 'new_value', 'changed_by', 'performed_by_detail',
+            'ip_address', 'timestamp'
+        ]
+
+
 class GradeAppealSerializer(serializers.ModelSerializer):
     student_detail          = UserListSerializer(source='student', read_only=True)
     teacher_reviewed_detail = UserListSerializer(source='teacher_reviewed_by', read_only=True)
     override_by_detail      = UserListSerializer(source='override_by', read_only=True)
-    result_detail           = StudentResultSerializer(source='result', read_only=True)
+    grade_detail            = GradeSerializer(source='grade', read_only=True)
 
     class Meta:
         model  = GradeAppeal
         fields = [
-            'id', 'result', 'result_detail',
+            'id', 'grade', 'grade_detail',
             'student', 'student_detail',
             'reason', 'status',
             'teacher_response', 'teacher_reviewed_by', 'teacher_reviewed_detail',
@@ -273,5 +177,5 @@ class GradeAppealSerializer(serializers.ModelSerializer):
             'override_by', 'override_at',
             'created_at', 'updated_at',
             'student_detail', 'teacher_reviewed_detail', 'override_by_detail',
-            'result_detail',
+            'grade_detail',
         ]

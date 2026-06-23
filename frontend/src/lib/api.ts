@@ -203,6 +203,7 @@ export async function apiFetch<T>(
       );
     }
 
+
     if (res.status === 204) return undefined as T;
     return res.json() as Promise<T>;
   } catch (error) {

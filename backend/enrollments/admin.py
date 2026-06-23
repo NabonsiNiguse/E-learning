@@ -1,32 +1,27 @@
-"""
-Enrollments admin — student-course enrollment management with status
-lifecycle, bulk actions, and data integrity enforcement.
-"""
 from django.contrib import admin
 from django.utils.html import format_html
-from django.db.models import Count
 from .models import Enrollment
 
 
 class EnrollmentAdmin(admin.ModelAdmin):
     list_display  = [
-        'student_link', 'course_link', 'status_badge',
+        'student_link', 'course_offering_link', 'status_badge',
         'enrolled_at', 'completed_at', 'progress_pct',
     ]
-    list_filter   = ['status', 'course__category', 'enrolled_at']
+    list_filter   = ['status', 'course_offering__course__category', 'enrolled_at']
     search_fields = [
         'student__email', 'student__first_name', 'student__last_name',
-        'course__title',
+        'course_offering__course__title',
     ]
     readonly_fields = ['enrolled_at', 'updated_at', 'completed_at']
-    raw_id_fields   = ['student', 'course']
+    raw_id_fields   = ['student', 'course_offering']
     date_hierarchy  = 'enrolled_at'
     list_per_page   = 30
     actions         = ['activate_enrollments', 'lock_enrollments', 'mark_completed']
 
     fieldsets = (
         ('Enrollment', {
-            'fields': ('student', 'course', 'status'),
+            'fields': ('student', 'course_offering', 'status'),
         }),
         ('Timestamps', {
             'classes': ('collapse',),
@@ -35,7 +30,7 @@ class EnrollmentAdmin(admin.ModelAdmin):
     )
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related('student', 'course')
+        return super().get_queryset(request).select_related('student', 'course_offering__course')
 
     @admin.display(description='Student')
     def student_link(self, obj):
@@ -44,12 +39,14 @@ class EnrollmentAdmin(admin.ModelAdmin):
             obj.student_id, obj.student.full_name
         )
 
-    @admin.display(description='Course')
-    def course_link(self, obj):
-        return format_html(
-            '<a href="/admin/courses/course/{}/change/">{}</a>',
-            obj.course_id, obj.course.title
-        )
+    @admin.display(description='Course Offering')
+    def course_offering_link(self, obj):
+        if obj.course_offering:
+            return format_html(
+                '<a href="/admin/courses/courseoffering/{}/change/">{}</a>',
+                obj.course_offering_id, obj.course_offering
+            )
+        return '—'
 
     @admin.display(description='Status')
     def status_badge(self, obj):
@@ -67,11 +64,13 @@ class EnrollmentAdmin(admin.ModelAdmin):
 
     @admin.display(description='Progress')
     def progress_pct(self, obj):
-        total = obj.course.lessons.count()
+        if not obj.course_offering or not obj.course_offering.course:
+            return '—'
+        total = obj.course_offering.course.lessons.count()
         if not total:
             return '—'
         done = obj.student.progress_records.filter(
-            lesson__course=obj.course, completed=True
+            lesson__course=obj.course_offering.course, completed=True
         ).count()
         pct = int(done / total * 100)
         color = '#059669' if pct == 100 else '#2563eb' if pct > 50 else '#d97706'
@@ -85,7 +84,6 @@ class EnrollmentAdmin(admin.ModelAdmin):
             pct, color, color, f'{pct}%'
         )
 
-    # ── Actions ──────────────────────────────────────────────────────────
     @admin.action(description='✓ Activate selected enrollments')
     def activate_enrollments(self, request, queryset):
         updated = queryset.update(status=Enrollment.Status.ACTIVE)

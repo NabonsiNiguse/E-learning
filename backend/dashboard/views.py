@@ -1,12 +1,12 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Count, Q, Avg
+from django.db.models import Count, Q
 from django.utils import timezone
 from datetime import timedelta
 
 from users.models import User
-from courses.models import Course, Lesson
+from courses.models import Course, Lesson, CourseOffering
 from enrollments.models import Enrollment
 from progress.models import Progress
 from payments.models import Payment
@@ -24,7 +24,6 @@ class AdminDashboardView(APIView):
         now = timezone.now()
         last_30 = now - timedelta(days=30)
 
-        # Consolidate user counts into single query
         user_stats = User.objects.aggregate(
             total=Count('id'),
             teachers=Count('id', filter=Q(role='teacher')),
@@ -32,29 +31,25 @@ class AdminDashboardView(APIView):
             new_users=Count('id', filter=Q(created_at__gte=last_30))
         )
 
-        # Consolidate course counts
         course_stats = Course.objects.aggregate(
             total=Count('id'),
             published=Count('id', filter=Q(status='published'))
         )
 
-        # Consolidate enrollment counts
         enrollment_stats = Enrollment.objects.aggregate(
             total=Count('id'),
             active=Count('id', filter=Q(status='active')),
             new_enrollments=Count('id', filter=Q(enrolled_at__gte=last_30))
         )
 
-        # Consolidate payment counts
         payment_stats = Payment.objects.aggregate(
             total_revenue=Count('id', filter=Q(status='success')),
             new_payments=Count('id', filter=Q(created_at__gte=last_30, status='success'))
         )
 
-        # Top courses by enrollment
         top_courses = (
             Course.objects
-            .annotate(enroll_count=Count('enrollments', filter=Q(enrollments__status='active')))
+            .annotate(enroll_count=Count('offerings__enrollments', filter=Q(offerings__enrollments__status='active')))
             .order_by('-enroll_count')[:5]
             .values('id', 'title', 'enroll_count')
         )
@@ -91,10 +86,8 @@ class TeacherDashboardView(APIView):
 
     def get(self, request):
         teacher = request.user
-        # Use aliased annotation names to avoid clashing with @property
-        # definitions on the Course model (lesson_count, enrolled_count).
-        courses = Course.objects.filter(teacher=teacher).annotate(
-            _student_count=Count('enrollments', filter=Q(enrollments__status__in=['active', 'completed'])),
+        courses = Course.objects.filter(offerings__instructor=teacher).distinct().annotate(
+            _student_count=Count('offerings__enrollments', filter=Q(offerings__enrollments__status__in=['active', 'completed'])),
             _lesson_count=Count('lessons'),
         )
 
@@ -110,7 +103,7 @@ class TeacherDashboardView(APIView):
             })
 
         total_students = Enrollment.objects.filter(
-            course__teacher=teacher,
+            course_offering__instructor=teacher,
             status__in=['active', 'completed'],
         ).values('student').distinct().count()
 
@@ -119,7 +112,7 @@ class TeacherDashboardView(APIView):
             'data': {
                 'total_courses':  courses.count(),
                 'total_students': total_students,
-                'total_lessons':  Lesson.objects.filter(course__teacher=teacher).count(),
+                'total_lessons':  Lesson.objects.filter(course__offerings__instructor=teacher).distinct().count(),
                 'courses':        course_data,
             }
         })
@@ -128,30 +121,25 @@ class TeacherDashboardView(APIView):
 class StudentDashboardView(APIView):
     """
     GET /api/v1/dashboard/student/
-    Enrolled courses, progress, and continue-learning for the student.
     """
     permission_classes = [IsStudent]
 
     def get(self, request):
         student = request.user
-        enrollments = Enrollment.objects.filter(student=student).select_related('course')
+        enrollments = Enrollment.objects.filter(student=student).select_related('course_offering__course')
 
-        # Get all course IDs upfront
-        course_ids = [e.course_id for e in enrollments]
+        course_ids = [e.course_offering.course_id for e in enrollments if e.course_offering]
 
-        # Fetch all lesson counts in one query
         lesson_counts = dict(
             Lesson.objects.filter(
                 course_id__in=course_ids, status='published'
             ).values('course_id').annotate(count=Count('id')).values_list('course_id', 'count')
         )
 
-        # Fetch all completed progress in one query
         completed_progress = Progress.objects.filter(
             student=student, lesson__course_id__in=course_ids, completed=True
         ).select_related('lesson').values('lesson__course_id', 'lesson_id')
 
-        # Group completed lessons by course
         completed_by_course = {}
         for prog in completed_progress:
             course_id = prog['lesson__course_id']
@@ -159,12 +147,10 @@ class StudentDashboardView(APIView):
                 completed_by_course[course_id] = set()
             completed_by_course[course_id].add(prog['lesson_id'])
 
-        # Fetch all published lessons for next lesson calculation
         all_lessons = Lesson.objects.filter(
             course_id__in=course_ids, status='published'
         ).order_by('course_id', 'order').values('id', 'course_id', 'title', 'order')
 
-        # Group lessons by course
         lessons_by_course = {}
         for lesson in all_lessons:
             course_id = lesson['course_id']
@@ -174,7 +160,9 @@ class StudentDashboardView(APIView):
 
         enrolled_data = []
         for enrollment in enrollments:
-            course = enrollment.course
+            if not enrollment.course_offering:
+                continue
+            course = enrollment.course_offering.course
             course_id = course.id
 
             total_lessons = lesson_counts.get(course_id, 0)
@@ -184,7 +172,6 @@ class StudentDashboardView(APIView):
                 (completed_lessons / total_lessons * 100), 1
             ) if total_lessons else 0
 
-            # Find next lesson to continue
             next_lesson = None
             for lesson in lessons_by_course.get(course_id, []):
                 if lesson['id'] not in completed_ids:

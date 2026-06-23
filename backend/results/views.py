@@ -1,254 +1,395 @@
-"""
-Results views - unified /results endpoint with role-based access control.
-
-Architecture:
-  - Single /results endpoint with role-based behavior
-  - Teachers: view assigned students, enter/edit raw scores only, submit to lock
-  - Students: view own results (read-only), filter by year/semester
-  - Admin: full control, manage grading rules, approve/unlock results
-  - All mutations logged in ResultAuditLog (immutable)
-  - Grades computed automatically from GradingScale - never stored directly
-"""
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from django.utils import timezone
-from .models import StudentResult, GradingScale, GradeAppeal, ResultAuditLog
+from django.db import transaction
+from django.db.models import Q
+from .models import Grade, AssessmentTemplate, AssessmentScore, GradingScale, GradeAppeal, AcademicAuditLog
 from .serializers import (
-    StudentResultSerializer,
-    TeacherResultSerializer,
-    AdminResultSerializer,
-    TeacherScoreWriteSerializer,
-    AdminResultWriteSerializer,
+    GradeSerializer,
+    GradeWriteSerializer,
+    AssessmentTemplateSerializer,
+    AssessmentScoreSerializer,
+    AssessmentScoreWriteSerializer,
     GradingScaleSerializer,
     GradingScaleWriteSerializer,
     GradeAppealSerializer,
     AuditLogSerializer,
+    ConcurrencyConflictException,
 )
+from enrollments.models import Enrollment
+
+
+def recalculate_final_grade(enrollment, user, ip_address=None):
+    """
+    Computes final grade as weighted sum of assessment scores.
+    Must be run inside a transaction.
+    """
+    scores = AssessmentScore.objects.filter(enrollment=enrollment)
+    total_score = 0
+    total_weight = 0
+    for s in scores:
+        if s.score_obtained is not None and s.template.max_score > 0:
+            weight = s.template.weight_percentage
+            obtained = s.score_obtained
+            max_s = s.template.max_score
+            total_score += (obtained / max_s) * weight
+            total_weight += weight
+
+    grade, created = Grade.objects.get_or_create(
+        enrollment=enrollment,
+        defaults={'raw_total_score': total_score, 'status': Grade.Status.DRAFT, 'version': 1}
+    )
+    if not created:
+        old_val = {'raw_total_score': str(grade.raw_total_score)}
+        grade.raw_total_score = total_score
+        grade.version += 1
+        grade.save()
+
+        # Log automatically recalculated grade
+        AcademicAuditLog.objects.create(
+            table_name='grades',
+            record_id=grade.id,
+            action='UPDATE',
+            old_value=old_val,
+            new_value={'raw_total_score': str(grade.raw_total_score), 'version': grade.version},
+            changed_by=user,
+            ip_address=ip_address
+        )
+    else:
+        AcademicAuditLog.objects.create(
+            table_name='grades',
+            record_id=grade.id,
+            action='INSERT',
+            new_value={'raw_total_score': str(grade.raw_total_score), 'status': grade.status, 'version': grade.version},
+            changed_by=user,
+            ip_address=ip_address
+        )
 
 
 class ResultsViewSet(viewsets.ModelViewSet):
     """
-    Unified /results endpoint with role-based access control.
-
-    Teacher:
-      - GET: list students in their courses
-      - PATCH: update raw_score only (if not locked)
-      - POST /submit/: lock result after entering scores
-
-    Student:
-      - GET: list own results (with year/semester filtering)
-      - GET detail: view own result (read-only)
-
-    Admin:
-      - GET: list all results
-      - POST: create result
-      - PATCH: full control
-      - POST /approve/: approve final results
-      - POST /unlock/: unlock for correction
-      - GET /audit-log/: view audit trail
+    ViewSet for managing final Grades.
     """
-    pagination_class = None
-    queryset = StudentResult.objects.all()
-    serializer_class = StudentResultSerializer
+    queryset = Grade.objects.all()
+    serializer_class = GradeSerializer
     permission_classes = [IsAuthenticated]
-    filterset_fields = ['year', 'semester', 'status']
-    ordering_fields = ['year', 'semester', 'student__last_name', 'created_at']
-    ordering = ['-year', 'semester', 'student__last_name']
+    filterset_fields = ['status']
+    ordering_fields = ['updated_at']
+    ordering = ['-updated_at']
 
     def get_queryset(self):
         user = self.request.user
-        if user.is_admin:
-            return StudentResult.objects.all()
+        qs = Grade.objects.select_related(
+            'enrollment__student',
+            'enrollment__course_offering__course',
+            'enrollment__course_offering__semester'
+        )
+        if user.is_super_admin or user.is_admin_only:
+            return qs
+        elif user.is_dean:
+            return qs.filter(enrollment__course_offering__course__department__faculty__dean=user)
+        elif user.is_dept_head:
+            return qs.filter(enrollment__course_offering__course__department__head=user)
         elif user.is_teacher:
-            # Teacher sees results for their courses only
-            return StudentResult.objects.filter(course__teacher=user)
+            return qs.filter(enrollment__course_offering__instructor=user)
         elif user.is_student:
-            # Student sees only their own results
-            return StudentResult.objects.filter(student=user)
-        return StudentResult.objects.none()
+            # Students only see RELEASED grades
+            return qs.filter(enrollment__student=user, status=Grade.Status.RELEASED)
+        return Grade.objects.none()
 
     def get_serializer_class(self):
-        """
-        STRICT role-based serializer selection.
-        Each role gets a COMPLETELY DIFFERENT serializer with different fields.
-        """
-        user = self.request.user
-        
-        # WRITE operations
         if self.request.method in ['PUT', 'PATCH']:
-            if user.is_admin:
-                return AdminResultWriteSerializer
-            elif user.is_teacher:
-                return TeacherScoreWriteSerializer
-            else:
-                raise PermissionDenied('Students cannot edit results.')
-        
-        # READ operations
-        if user.is_admin:
-            return AdminResultSerializer
-        elif user.is_teacher:
-            return TeacherResultSerializer
-        elif user.is_student:
-            return StudentResultSerializer
-        
-        return StudentResultSerializer
+            return GradeWriteSerializer
+        return GradeSerializer
 
-    def create(self, request, *args, **kwargs):
-        """Only admin can create results."""
-        if not request.user.is_admin:
-            raise PermissionDenied('Only admin can create results.')
-        return super().create(request, *args, **kwargs)
-
-    def perform_create(self, serializer):
-        result = serializer.save()
-        # Log creation
-        ResultAuditLog.objects.create(
-            result=result,
-            action=ResultAuditLog.Action.CREATED,
-            performed_by=self.request.user,
-            performed_by_role=self.request.user.role,
-            new_value={
-                'student_id': result.student_id,
-                'course_id': result.course_id,
-                'year': result.year,
-                'semester': result.semester,
-                'raw_score': str(result.raw_score) if result.raw_score else None,
-            },
-        )
-
-    def perform_update(self, serializer):
-        user = self.request.user
+    def update(self, request, *args, **kwargs):
+        user = request.user
+        partial = kwargs.pop('partial', False)
         instance = self.get_object()
 
-        # Prevent editing locked results (unless admin)
-        if instance.is_locked and not user.is_admin:
-            raise PermissionDenied('This result is locked. Contact admin to unlock.')
-
-        # Teacher can only edit raw_score
+        # Check permissions
         if user.is_teacher:
-            if 'raw_score' in serializer.validated_data:
-                old_score = instance.raw_score
-                instance = serializer.save()
-                ResultAuditLog.objects.create(
-                    result=instance,
-                    action=ResultAuditLog.Action.SCORE_SET,
-                    performed_by=user,
-                    performed_by_role=user.role,
-                    old_value={'raw_score': str(old_score) if old_score else None},
-                    new_value={'raw_score': str(instance.raw_score) if instance.raw_score else None},
-                )
-            else:
-                raise PermissionDenied('Teachers can only edit raw_score.')
-        else:
-            # Admin can edit anything
-            instance = serializer.save()
+            if instance.enrollment.course_offering.instructor != user:
+                raise PermissionDenied("You are not the instructor for this course offering.")
+            if instance.is_locked:
+                raise PermissionDenied("This grade is locked. Contact department head/admin to unlock.")
+        elif not (user.is_super_admin or user.is_admin_only or user.is_dept_head or user.is_dean):
+            raise PermissionDenied("You do not have permission to edit grades.")
+
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+
+        current_version = serializer.validated_data.get('version')
+        raw_total_score = serializer.validated_data.get('raw_total_score')
+        status_val = serializer.validated_data.get('status')
+
+        with transaction.atomic():
+            # Refetch with select_for_update to guarantee isolation
+            grade = Grade.objects.select_for_update().get(pk=instance.pk)
+            if grade.version != current_version:
+                raise ConcurrencyConflictException("This grade record has been updated elsewhere.")
+
+            old_val = {
+                'raw_total_score': str(grade.raw_total_score) if grade.raw_total_score else None,
+                'status': grade.status,
+                'version': grade.version
+            }
+
+            if raw_total_score is not None:
+                grade.raw_total_score = raw_total_score
+            if status_val is not None:
+                grade.status = status_val
+
+            grade.version += 1
+            grade.save()
+
+            AcademicAuditLog.objects.create(
+                table_name='grades',
+                record_id=grade.id,
+                action='UPDATE',
+                old_value=old_val,
+                new_value={
+                    'raw_total_score': str(grade.raw_total_score) if grade.raw_total_score else None,
+                    'status': grade.status,
+                    'version': grade.version
+                },
+                changed_by=user,
+            )
+
+        return Response(GradeSerializer(grade).data)
 
     @action(detail=True, methods=['post'])
     def submit(self, request, pk=None):
-        """Teacher submits scores - locks the result."""
-        result = self.get_object()
-        if not request.user.is_teacher:
-            raise PermissionDenied('Only teachers can submit.')
-        if result.course.teacher != request.user:
-            raise PermissionDenied('Not your course.')
-        if result.status not in (StudentResult.Status.DRAFT, StudentResult.Status.UNLOCKED):
-            return Response(
-                {'error': 'Result must be in draft or unlocked state to submit.'},
-                status=status.HTTP_400_BAD_REQUEST,
+        """Teacher locks the grade."""
+        grade = self.get_object()
+        user = request.user
+        if not user.is_teacher:
+            raise PermissionDenied("Only teachers can submit/lock grades.")
+        if grade.enrollment.course_offering.instructor != user:
+            raise PermissionDenied("You are not the instructor for this course offering.")
+        if grade.raw_total_score is None:
+            raise ValidationError("Grade score must be entered before submitting.")
+
+        with transaction.atomic():
+            grade = Grade.objects.select_for_update().get(pk=grade.pk)
+            old_status = grade.status
+            grade.status = Grade.Status.LOCKED
+            grade.version += 1
+            grade.save()
+
+            AcademicAuditLog.objects.create(
+                table_name='grades',
+                record_id=grade.id,
+                action='UPDATE',
+                old_value={'status': old_status, 'version': grade.version - 1},
+                new_value={'status': grade.status, 'version': grade.version},
+                changed_by=user
             )
-        if result.raw_score is None:
-            return Response(
-                {'error': 'Score required before submit.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
-        result.status = StudentResult.Status.SUBMITTED
-        result.submitted_at = timezone.now()
-        result.submitted_by = request.user
-        result.save()
-
-        ResultAuditLog.objects.create(
-            result=result,
-            action=ResultAuditLog.Action.SUBMITTED,
-            performed_by=request.user,
-            performed_by_role=request.user.role,
-            new_value={'status': result.status, 'submitted_at': result.submitted_at.isoformat()},
-        )
-
-        return Response(StudentResultSerializer(result).data)
+        return Response(GradeSerializer(grade).data)
 
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
-        """Admin approves final results."""
-        result = self.get_object()
-        if not request.user.is_admin:
-            raise PermissionDenied('Only admin can approve.')
-        if result.status != StudentResult.Status.SUBMITTED:
-            return Response(
-                {'error': 'Must be submitted first.'},
-                status=status.HTTP_400_BAD_REQUEST,
+        """Department Head or Admin releases/approves grade."""
+        grade = self.get_object()
+        user = request.user
+
+        # Enforce Head/Admin permission
+        is_allowed = False
+        if user.is_super_admin or user.is_admin_only:
+            is_allowed = True
+        elif user.is_dept_head:
+            if grade.enrollment.course_offering.course.department.head == user:
+                is_allowed = True
+        elif user.is_dean:
+            if grade.enrollment.course_offering.course.department.faculty.dean == user:
+                is_allowed = True
+
+        if not is_allowed:
+            raise PermissionDenied("Only Department Head, Dean, or Admin can release grades.")
+
+        with transaction.atomic():
+            grade = Grade.objects.select_for_update().get(pk=grade.pk)
+            old_status = grade.status
+            grade.status = Grade.Status.RELEASED
+            grade.version += 1
+            grade.save()
+
+            AcademicAuditLog.objects.create(
+                table_name='grades',
+                record_id=grade.id,
+                action='UPDATE',
+                old_value={'status': old_status, 'version': grade.version - 1},
+                new_value={'status': grade.status, 'version': grade.version},
+                changed_by=user
             )
 
-        result.status = StudentResult.Status.APPROVED
-        result.approved_at = timezone.now()
-        result.approved_by = request.user
-        result.save()
-
-        ResultAuditLog.objects.create(
-            result=result,
-            action=ResultAuditLog.Action.APPROVED,
-            performed_by=request.user,
-            performed_by_role=request.user.role,
-            new_value={'status': result.status, 'approved_at': result.approved_at.isoformat()},
-        )
-
-        return Response(StudentResultSerializer(result).data)
+        return Response(GradeSerializer(grade).data)
 
     @action(detail=True, methods=['post'])
     def unlock(self, request, pk=None):
-        """Admin unlocks result for correction."""
-        result = self.get_object()
-        if not request.user.is_admin:
-            raise PermissionDenied('Only admin can unlock.')
+        """Admin unlocks grade for corrections."""
+        grade = self.get_object()
+        user = request.user
+        if not (user.is_super_admin or user.is_admin_only):
+            raise PermissionDenied("Only Admins can unlock grades.")
 
-        old_status = result.status
-        result.status = StudentResult.Status.UNLOCKED
-        result.unlocked_at = timezone.now()
-        result.unlocked_by = request.user
-        result.save()
+        with transaction.atomic():
+            grade = Grade.objects.select_for_update().get(pk=grade.pk)
+            old_status = grade.status
+            grade.status = Grade.Status.DRAFT
+            grade.version += 1
+            grade.save()
 
-        ResultAuditLog.objects.create(
-            result=result,
-            action=ResultAuditLog.Action.UNLOCKED,
-            performed_by=request.user,
-            performed_by_role=request.user.role,
-            old_value={'status': old_status},
-            new_value={'status': result.status, 'unlocked_at': result.unlocked_at.isoformat()},
-        )
+            AcademicAuditLog.objects.create(
+                table_name='grades',
+                record_id=grade.id,
+                action='UPDATE',
+                old_value={'status': old_status, 'version': grade.version - 1},
+                new_value={'status': grade.status, 'version': grade.version},
+                changed_by=user
+            )
 
-        return Response(StudentResultSerializer(result).data)
+        return Response(GradeSerializer(grade).data)
 
     @action(detail=False, methods=['get'], url_path='audit_log')
     def audit_log(self, request):
-        """Get audit log for a result (admin only)."""
-        if not request.user.is_admin:
-            raise PermissionDenied('Admin only.')
-        result_id = request.query_params.get('result_id')
-        if not result_id:
-            return Response(
-                {'error': 'result_id required.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        logs = ResultAuditLog.objects.filter(result_id=result_id)
+        user = request.user
+        if not (user.is_super_admin or user.is_admin_only or user.is_dept_head or user.is_dean):
+            raise PermissionDenied("Permission denied to view audit logs.")
+        record_id = request.query_params.get('record_id')
+        table_name = request.query_params.get('table_name', 'grades')
+        if not record_id:
+            raise ValidationError("record_id parameter is required.")
+        logs = AcademicAuditLog.objects.filter(table_name=table_name, record_id=record_id)
         return Response(AuditLogSerializer(logs, many=True).data)
 
 
+class AssessmentTemplateViewSet(viewsets.ModelViewSet):
+    queryset = AssessmentTemplate.objects.all()
+    serializer_class = AssessmentTemplateSerializer
+    permission_classes = [IsAuthenticated]
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        offering = serializer.validated_data.get('course_offering')
+
+        is_allowed = False
+        if user.is_super_admin or user.is_admin_only:
+            is_allowed = True
+        elif user.is_dept_head:
+            if offering.course.department.head == user:
+                is_allowed = True
+
+        if not is_allowed:
+            raise PermissionDenied("Only Admin or Department Head can manage assessment templates.")
+
+        serializer.save()
+
+
+class AssessmentScoreViewSet(viewsets.ModelViewSet):
+    queryset = AssessmentScore.objects.all()
+    serializer_class = AssessmentScoreSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = AssessmentScore.objects.select_related(
+            'enrollment__student',
+            'template__course_offering__course'
+        )
+        if user.is_super_admin or user.is_admin_only:
+            return qs
+        elif user.is_dean:
+            return qs.filter(enrollment__course_offering__course__department__faculty__dean=user)
+        elif user.is_dept_head:
+            return qs.filter(enrollment__course_offering__course__department__head=user)
+        elif user.is_teacher:
+            return qs.filter(enrollment__course_offering__instructor=user)
+        elif user.is_student:
+            return qs.filter(enrollment__student=user)
+        return AssessmentScore.objects.none()
+
+    def get_serializer_class(self):
+        if self.request.method in ['PUT', 'PATCH']:
+            return AssessmentScoreWriteSerializer
+        return AssessmentScoreSerializer
+
+    def update(self, request, *args, **kwargs):
+        user = request.user
+        partial = kwargs.pop('partial', False)
+
+        # Permission check BEFORE get_object() so teachers who aren't
+        # assigned to this offering receive 403 instead of 404.
+        pk = kwargs.get('pk')
+        try:
+            raw_instance = AssessmentScore.objects.select_related(
+                'enrollment__course_offering', 'enrollment__grade'
+            ).get(pk=pk)
+        except AssessmentScore.DoesNotExist:
+            from rest_framework.exceptions import NotFound
+            raise NotFound()
+
+        if user.is_teacher:
+            if raw_instance.enrollment.course_offering.instructor != user:
+                raise PermissionDenied("You are not the instructor for this course offering.")
+            # Check if final grade is already locked/released
+            try:
+                grade = raw_instance.enrollment.grade
+                if grade.is_locked:
+                    raise PermissionDenied("Final grade is locked. Contact head/admin to unlock.")
+            except Grade.DoesNotExist:
+                pass
+        elif not (user.is_super_admin or user.is_admin_only):
+            raise PermissionDenied("You do not have permission to update scores.")
+
+        instance = self.get_object()
+
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+
+        current_version = serializer.validated_data.get('version')
+        score_obtained = serializer.validated_data.get('score_obtained')
+
+        with transaction.atomic():
+            score = AssessmentScore.objects.select_for_update().get(pk=instance.pk)
+            if score.version != current_version:
+                raise ConcurrencyConflictException("This assessment score has been updated elsewhere.")
+
+            old_val = {
+                'score_obtained': str(score.score_obtained) if score.score_obtained else None,
+                'version': score.version
+            }
+
+            if score_obtained is not None:
+                score.score_obtained = score_obtained
+            score.version += 1
+            score.graded_by = user
+            score.graded_at = timezone.now()
+            score.save()
+
+            AcademicAuditLog.objects.create(
+                table_name='assessment_scores',
+                record_id=score.id,
+                action='UPDATE',
+                old_value=old_val,
+                new_value={
+                    'score_obtained': str(score.score_obtained) if score.score_obtained else None,
+                    'version': score.version
+                },
+                changed_by=user,
+            )
+
+            # Auto-recalculate Grade
+            recalculate_final_grade(score.enrollment, user)
+
+        return Response(AssessmentScoreSerializer(score).data)
+
+
 class GradingScaleViewSet(viewsets.ModelViewSet):
-    """Admin manages grading scales."""
-    pagination_class = None
     queryset = GradingScale.objects.all()
     permission_classes = [IsAuthenticated]
 
@@ -277,22 +418,16 @@ class GradingScaleViewSet(viewsets.ModelViewSet):
 
 
 class GradeAppealViewSet(viewsets.ModelViewSet):
-    """
-    Students create appeals; teachers and admin review/override.
-    """
-    pagination_class = None
     serializer_class = GradeAppealSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         user = self.request.user
-        if user.is_admin:
+        if user.is_super_admin or user.is_admin_only:
             return GradeAppeal.objects.all()
         elif user.is_teacher:
-            # Teacher sees appeals for their courses
-            return GradeAppeal.objects.filter(result__course__teacher=user)
+            return GradeAppeal.objects.filter(grade__enrollment__course_offering__instructor=user)
         elif user.is_student:
-            # Student sees their own appeals
             return GradeAppeal.objects.filter(student=user)
         return GradeAppeal.objects.none()
 
@@ -302,19 +437,25 @@ class GradeAppealViewSet(viewsets.ModelViewSet):
         return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
-        serializer.save(student=self.request.user)
+        # Student registers appeal against their Grade
+        grade_id = self.request.data.get('grade')
+        try:
+            grade = Grade.objects.get(pk=grade_id, enrollment__student=self.request.user)
+        except Grade.DoesNotExist:
+            raise ValidationError("Grade record not found or does not belong to you.")
+        serializer.save(student=self.request.user, grade=grade)
 
     @action(detail=True, methods=['post'])
     def review(self, request, pk=None):
-        """Teacher reviews appeal and provides response."""
         appeal = self.get_object()
-        if not request.user.is_teacher:
-            raise PermissionDenied('Only teachers can review.')
-        if appeal.result.course.teacher != request.user:
-            raise PermissionDenied('Not your course.')
+        user = request.user
+        if not user.is_teacher:
+            raise PermissionDenied('Only teachers can review appeals.')
+        if appeal.grade.enrollment.course_offering.instructor != user:
+            raise PermissionDenied('Not your course offering.')
 
         appeal.teacher_response = request.data.get('teacher_response', '')
-        appeal.teacher_reviewed_by = request.user
+        appeal.teacher_reviewed_by = user
         appeal.teacher_reviewed_at = timezone.now()
         appeal.status = GradeAppeal.Status.REVIEWED
         appeal.save()
@@ -323,41 +464,38 @@ class GradeAppealViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def override(self, request, pk=None):
-        """Admin overrides grade via appeal."""
         appeal = self.get_object()
-        if not request.user.is_admin:
-            raise PermissionDenied('Only admin can override.')
+        user = request.user
+        if not (user.is_super_admin or user.is_admin_only):
+            raise PermissionDenied('Only admin can override grades.')
 
         override_score = request.data.get('override_score')
         if override_score is None:
-            return Response(
-                {'error': 'override_score required.'},
-                status=status.HTTP_400_BAD_REQUEST,
+            raise ValidationError('override_score is required.')
+
+        with transaction.atomic():
+            # Lock Grade
+            grade = Grade.objects.select_for_update().get(pk=appeal.grade.pk)
+            old_score = grade.raw_total_score
+            grade.raw_total_score = override_score
+            grade.version += 1
+            grade.save()
+
+            appeal.override_score = override_score
+            appeal.override_reason = request.data.get('override_reason', '')
+            appeal.override_by = user
+            appeal.override_at = timezone.now()
+            appeal.status = GradeAppeal.Status.APPROVED
+            appeal.save()
+
+            AcademicAuditLog.objects.create(
+                table_name='grades',
+                record_id=grade.id,
+                action='UPDATE',
+                old_value={'raw_total_score': str(old_score), 'version': grade.version - 1},
+                new_value={'raw_total_score': str(grade.raw_total_score), 'version': grade.version},
+                changed_by=user,
+                note=f'Override via appeal#{appeal.id}'
             )
-
-        # Update result score
-        result = appeal.result
-        old_score = result.raw_score
-        result.raw_score = override_score
-        result.save()
-
-        # Update appeal
-        appeal.override_score = override_score
-        appeal.override_reason = request.data.get('override_reason', '')
-        appeal.override_by = request.user
-        appeal.override_at = timezone.now()
-        appeal.status = GradeAppeal.Status.APPROVED
-        appeal.save()
-
-        # Log the override
-        ResultAuditLog.objects.create(
-            result=result,
-            action=ResultAuditLog.Action.SCORE_SET,
-            performed_by=request.user,
-            performed_by_role=request.user.role,
-            old_value={'raw_score': str(old_score) if old_score else None},
-            new_value={'raw_score': str(result.raw_score)},
-            note=f'Override via appeal#{appeal.id}',
-        )
 
         return Response(GradeAppealSerializer(appeal).data)

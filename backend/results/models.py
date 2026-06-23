@@ -1,29 +1,12 @@
-"""
-Results models — role-based grade management with full data integrity.
-
-Design principles:
-  - Raw scores (0–100) stored separately from computed grades/GPA
-  - Grades calculated automatically via GradingScale — teachers cannot set them
-  - All mutations produce an immutable AuditLog entry
-  - Records lock after final submission; only Admin can unlock
-  - Year/semester filtering via indexed fields — never mutates original data
-  - unique_together on (student, course, year, semester) prevents duplicates
-"""
 from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils import timezone
+from courses.models import CourseOffering
+from enrollments.models import Enrollment
 
 
-# ---------------------------------------------------------------------------
-# Grading Scale — managed by Admin only
-# ---------------------------------------------------------------------------
 class GradingScale(models.Model):
-    """
-    Defines the official letter-grade thresholds.
-    Admin creates/updates these; teachers and students cannot touch them.
-    Only one active scale at a time (is_active=True).
-    """
     name        = models.CharField(max_length=100, help_text="e.g. 'Standard 2024'")
     is_active   = models.BooleanField(default=False)
     created_by  = models.ForeignKey(
@@ -41,19 +24,14 @@ class GradingScale(models.Model):
         return f'{self.name} ({"active" if self.is_active else "inactive"})'
 
     def save(self, *args, **kwargs):
-        # Enforce single active scale
         if self.is_active:
             GradingScale.objects.exclude(pk=self.pk).update(is_active=False)
         super().save(*args, **kwargs)
 
 
 class GradingRule(models.Model):
-    """
-    One row per letter grade in a GradingScale.
-    e.g. A+ → min_score=95, max_score=100, gpa_points=4.0
-    """
     scale       = models.ForeignKey(GradingScale, on_delete=models.CASCADE, related_name='rules')
-    letter      = models.CharField(max_length=3)   # A+, A, B+, B, C+, C, D, F
+    letter      = models.CharField(max_length=3)
     min_score   = models.DecimalField(max_digits=5, decimal_places=2)
     max_score   = models.DecimalField(max_digits=5, decimal_places=2)
     gpa_points  = models.DecimalField(max_digits=3, decimal_places=1)
@@ -72,151 +50,108 @@ class GradingRule(models.Model):
         return f'{self.scale.name}: {self.letter} ({self.min_score}–{self.max_score})'
 
 
-# ---------------------------------------------------------------------------
-# Student Result — one record per student per course per semester
-# ---------------------------------------------------------------------------
-class StudentResult(models.Model):
-    """
-    Core result record. Stores raw scores only.
-    Computed fields (grade_letter, gpa, pass_fail) are derived on read
-    via the active GradingScale — never stored directly by teachers.
-    """
-    class Status(models.TextChoices):
-        DRAFT     = 'draft',     'Draft'        # teacher is entering scores
-        SUBMITTED = 'submitted', 'Submitted'    # teacher submitted; locked
-        APPROVED  = 'approved',  'Approved'     # admin approved final results
-        UNLOCKED  = 'unlocked',  'Unlocked'     # admin unlocked for correction
-
-    SEMESTER_CHOICES = [
-        ('semester_1', 'Semester 1'),
-        ('semester_2', 'Semester 2'),
-        ('summer',     'Summer'),
-    ]
-
-    student     = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
-        related_name='results', limit_choices_to={'role': 'student'},
-    )
-    course      = models.ForeignKey(
-        'courses.Course', on_delete=models.CASCADE, related_name='results',
-    )
-    year        = models.PositiveSmallIntegerField(
-        help_text='Academic year, e.g. 2024',
-        db_index=True,
-    )
-    semester    = models.CharField(
-        max_length=12, choices=SEMESTER_CHOICES, db_index=True,
-    )
-
-    # Raw score — only field teachers can write (0–100)
-    raw_score   = models.DecimalField(
-        max_digits=5, decimal_places=2, null=True, blank=True,
-        validators=[MinValueValidator(0), MaxValueValidator(100)],
-        help_text='Score entered by teacher (0–100). Grade is computed automatically.',
-    )
-
-    # Workflow
-    status      = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT)
-    submitted_at  = models.DateTimeField(null=True, blank=True)
-    submitted_by  = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
-        related_name='results_submitted',
-    )
-    approved_at   = models.DateTimeField(null=True, blank=True)
-    approved_by   = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
-        related_name='results_approved',
-    )
-    unlocked_at   = models.DateTimeField(null=True, blank=True)
-    unlocked_by   = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
-        related_name='results_unlocked',
-    )
-
-    created_at  = models.DateTimeField(auto_now_add=True)
-    updated_at  = models.DateTimeField(auto_now=True)
+class AssessmentTemplate(models.Model):
+    course_offering = models.ForeignKey(CourseOffering, on_delete=models.CASCADE, related_name='assessments')
+    name = models.CharField(max_length=100)
+    max_score = models.DecimalField(max_digits=5, decimal_places=2, validators=[MinValueValidator(0)])
+    weight_percentage = models.DecimalField(max_digits=5, decimal_places=2, validators=[MinValueValidator(0), MaxValueValidator(100)])
 
     class Meta:
-        db_table = 'student_results'
-        ordering = ['-year', 'semester', 'student__last_name']
-        # Prevent duplicate results for same student/course/period
-        unique_together = [('student', 'course', 'year', 'semester')]
+        db_table = 'assessment_templates'
+        unique_together = ('course_offering', 'name')
 
     def __str__(self):
-        return (
-            f'{self.student.full_name} | {self.course.title} | '
-            f'{self.year} {self.semester} | score={self.raw_score}'
-        )
+        return f"{self.name} ({self.weight_percentage}%) for {self.course_offering}"
+
+
+class AssessmentScore(models.Model):
+    enrollment = models.ForeignKey(Enrollment, on_delete=models.CASCADE, related_name='assessment_scores')
+    template = models.ForeignKey(AssessmentTemplate, on_delete=models.RESTRICT, related_name='scores')
+    score_obtained = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    graded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='graded_scores')
+    graded_at = models.DateTimeField(null=True, blank=True)
+    version = models.PositiveIntegerField(default=1)  # Optimistic Locking
+
+    class Meta:
+        db_table = 'assessment_scores'
+        unique_together = ('enrollment', 'template')
+
+    def __str__(self):
+        return f"{self.enrollment.student.email} - {self.template.name}: {self.score_obtained}"
+
+
+class Grade(models.Model):
+    class Status(models.TextChoices):
+        DRAFT     = 'draft',     'Draft'
+        LOCKED    = 'locked',    'Locked'
+        RELEASED  = 'released',  'Released'
+
+    enrollment = models.OneToOneField(Enrollment, on_delete=models.CASCADE, related_name='grade')
+    raw_total_score = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(0), MaxValueValidator(100)]
+    )
+    grade_letter = models.CharField(max_length=5, null=True, blank=True)
+    gpa_points = models.DecimalField(max_digits=3, decimal_places=2, null=True, blank=True)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT)
+    version = models.PositiveIntegerField(default=1)  # Optimistic Locking
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'grades'
+
+    def __str__(self):
+        return f"{self.enrollment.student.email} - Raw Total: {self.raw_total_score} [{self.status}]"
 
     @property
     def is_locked(self):
-        return self.status in (self.Status.SUBMITTED, self.Status.APPROVED)
+        return self.status in (self.Status.LOCKED, self.Status.RELEASED)
 
     def compute_grade(self):
-        """
-        Returns dict with letter, gpa_points, pass_fail based on active GradingScale.
-        Returns None if no active scale or score is null.
-        """
-        if self.raw_score is None:
+        if self.raw_total_score is None:
             return None
         try:
             scale = GradingScale.objects.get(is_active=True)
-            rule  = scale.rules.filter(
-                min_score__lte=self.raw_score,
-                max_score__gte=self.raw_score,
+            rule = scale.rules.filter(
+                min_score__lte=self.raw_total_score,
+                max_score__gte=self.raw_total_score,
             ).first()
             if rule:
                 return {
-                    'letter':    rule.letter,
-                    'gpa':       float(rule.gpa_points),
+                    'letter': rule.letter,
+                    'gpa': float(rule.gpa_points),
                     'pass_fail': rule.pass_fail,
                 }
         except GradingScale.DoesNotExist:
             pass
         return None
 
+    def save(self, *args, **kwargs):
+        grade_details = self.compute_grade()
+        if grade_details:
+            self.grade_letter = grade_details['letter']
+            self.gpa_points = grade_details['gpa']
+        super().save(*args, **kwargs)
 
-# ---------------------------------------------------------------------------
-# Audit Log — immutable record of every state change
-# ---------------------------------------------------------------------------
-class ResultAuditLog(models.Model):
-    """
-    Append-only log. Never updated or deleted.
-    Records who did what to which result and when.
-    """
-    class Action(models.TextChoices):
-        CREATED   = 'created',   'Created'
-        SCORE_SET = 'score_set', 'Score Set'
-        SUBMITTED = 'submitted', 'Submitted'
-        APPROVED  = 'approved',  'Approved'
-        UNLOCKED  = 'unlocked',  'Unlocked'
-        DELETED   = 'deleted',   'Deleted'
 
-    result      = models.ForeignKey(
-        StudentResult, on_delete=models.CASCADE, related_name='audit_logs',
-    )
-    action      = models.CharField(max_length=10, choices=Action.choices)
-    performed_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
-        related_name='result_audit_logs',
-    )
-    performed_by_role = models.CharField(max_length=11)
-    old_value   = models.JSONField(null=True, blank=True, help_text='State before change')
-    new_value   = models.JSONField(null=True, blank=True, help_text='State after change')
-    note        = models.TextField(blank=True)
-    timestamp   = models.DateTimeField(auto_now_add=True, db_index=True)
+class AcademicAuditLog(models.Model):
+    table_name = models.CharField(max_length=100)
+    record_id = models.IntegerField()
+    action = models.CharField(max_length=50)
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+    changed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='academic_audit_logs')
+    ip_address = models.CharField(max_length=45, null=True, blank=True)
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:
-        db_table = 'result_audit_logs'
+        db_table = 'academic_audit_logs'
         ordering = ['-timestamp']
 
     def __str__(self):
-        return f'[{self.timestamp:%Y-%m-%d %H:%M}] {self.action} on result#{self.result_id} by {self.performed_by}'
+        return f"[{self.timestamp}] {self.action} on {self.table_name}#{self.record_id} by {self.changed_by.email}"
 
 
-# ---------------------------------------------------------------------------
-# Grade Appeals (kept from original design)
-# ---------------------------------------------------------------------------
 class GradeAppeal(models.Model):
     class Status(models.TextChoices):
         PENDING   = 'pending',   'Pending'
@@ -225,8 +160,9 @@ class GradeAppeal(models.Model):
         APPROVED  = 'approved',  'Approved'
         REJECTED  = 'rejected',  'Rejected'
 
-    result      = models.ForeignKey(
-        StudentResult, on_delete=models.CASCADE, related_name='appeals',
+    grade = models.ForeignKey(
+        Grade, on_delete=models.CASCADE, related_name='appeals',
+        null=True
     )
     student     = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
@@ -259,7 +195,7 @@ class GradeAppeal(models.Model):
     class Meta:
         db_table = 'grade_appeals'
         ordering = ['-created_at']
-        unique_together = [('result', 'student')]
+        unique_together = [('grade', 'student')]
 
     def __str__(self):
-        return f'Appeal({self.student}, result#{self.result_id}, {self.status})'
+        return f'Appeal({self.student}, grade#{self.grade_id}, {self.status})'

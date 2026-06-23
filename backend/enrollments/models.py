@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from courses.models import CourseOffering
 
 
 class Enrollment(models.Model):
@@ -7,6 +8,7 @@ class Enrollment(models.Model):
         PENDING   = 'pending',   'Pending'
         ACTIVE    = 'active',    'Active'
         COMPLETED = 'completed', 'Completed'
+        DROPPED   = 'dropped',   'Dropped'
         LOCKED    = 'locked',    'Locked'   # premium course, payment pending
 
     student    = models.ForeignKey(
@@ -15,10 +17,11 @@ class Enrollment(models.Model):
         related_name='enrollments',
         limit_choices_to={'role': 'student'},
     )
-    course     = models.ForeignKey(
-        'courses.Course',
+    course_offering = models.ForeignKey(
+        CourseOffering,
         on_delete=models.CASCADE,
         related_name='enrollments',
+        null=True,
     )
     status     = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
     enrolled_at = models.DateTimeField(auto_now_add=True)
@@ -27,8 +30,8 @@ class Enrollment(models.Model):
 
     class Meta:
         db_table        = 'enrollments'
-        unique_together = [('student', 'course')]   # prevent duplicate enrollments
+        unique_together = [('student', 'course_offering')]   # prevent duplicate enrollments
         ordering        = ['-enrolled_at']
 
     def __str__(self):
-        return f'{self.student.email} → {self.course.title} [{self.status}]'
+        return f'{self.student.email} → {self.course_offering} [{self.status}]'

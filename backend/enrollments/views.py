@@ -7,17 +7,13 @@ from django.utils import timezone
 
 from .models import Enrollment
 from .serializers import EnrollmentSerializer, EnrollmentStatusSerializer
-from users.permissions import IsAdmin, IsStudent
+from users.permissions import IsAdmin
 
 
 class EnrollmentListCreateView(generics.ListCreateAPIView):
-    """
-    GET  — students see own enrollments; admins/teachers see all
-    POST — students enroll themselves; admins can enroll anyone
-    """
     serializer_class = EnrollmentSerializer
     filter_backends  = [DjangoFilterBackend, filters.OrderingFilter]
-    filterset_fields = ['status', 'course']
+    filterset_fields = ['status']
     ordering_fields  = ['enrolled_at']
 
     def get_permissions(self):
@@ -25,15 +21,14 @@ class EnrollmentListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        qs   = Enrollment.objects.select_related('student', 'course', 'course__teacher')
-        if user.is_admin:
+        qs   = Enrollment.objects.select_related('student', 'course_offering__course', 'course_offering__instructor')
+        if user.is_super_admin or user.is_admin_only:
             return qs
         if user.is_teacher:
-            return qs.filter(course__teacher=user)
+            return qs.filter(course_offering__instructor=user)
         return qs.filter(student=user)
 
     def create(self, request, *args, **kwargs):
-        # Students can only enroll themselves — enforced in serializer
         if request.user.is_teacher:
             return Response(
                 {'success': False, 'message': 'Teachers cannot enroll in courses.'},
@@ -51,9 +46,8 @@ class EnrollmentListCreateView(generics.ListCreateAPIView):
 
 
 class EnrollmentDetailView(generics.RetrieveUpdateDestroyAPIView):
-    """Admin: update enrollment status or remove enrollment."""
     permission_classes = [IsAdmin]
-    queryset = Enrollment.objects.select_related('student', 'course')
+    queryset = Enrollment.objects.select_related('student', 'course_offering')
 
     def get_serializer_class(self):
         if self.request.method in ('PUT', 'PATCH'):
@@ -67,7 +61,6 @@ class EnrollmentDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 
 class CompleteEnrollmentView(APIView):
-    """Student marks a course as completed (only if all published lessons are done)."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
@@ -88,15 +81,15 @@ class CompleteEnrollmentView(APIView):
                 {'success': False, 'message': 'Only active enrollments can be completed.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        # Verify all published lessons are completed
+
         from courses.models import Lesson
         from progress.models import Progress
         total_lessons = Lesson.objects.filter(
-            course=enrollment.course, status='published'
+            course=enrollment.course_offering.course, status='published'
         ).count()
         completed_lessons = Progress.objects.filter(
             student=request.user,
-            lesson__course=enrollment.course,
+            lesson__course=enrollment.course_offering.course,
             completed=True,
         ).count()
         if total_lessons > 0 and completed_lessons < total_lessons:

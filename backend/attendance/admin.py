@@ -1,32 +1,27 @@
-"""
-Attendance admin — daily attendance records with status breakdown,
-bulk mark actions, and date hierarchy navigation.
-"""
 from django.contrib import admin
 from django.utils.html import format_html
-from django.db.models import Count
 from .models import AttendanceRecord
 
 
 class AttendanceRecordAdmin(admin.ModelAdmin):
     list_display  = [
-        'student_link', 'course_link', 'date',
+        'student_link', 'course_offering_link', 'date',
         'status_badge', 'marked_by_display', 'notes_preview',
     ]
-    list_filter   = ['status', 'course', 'date']
+    list_filter   = ['status', 'course_offering', 'date']
     search_fields = [
         'student__email', 'student__first_name',
-        'student__last_name', 'course__title',
+        'student__last_name', 'course_offering__course__title',
     ]
     readonly_fields = ['created_at', 'updated_at']
-    raw_id_fields   = ['student', 'course', 'marked_by']
+    raw_id_fields   = ['student', 'course_offering', 'marked_by']
     date_hierarchy  = 'date'
     list_per_page   = 40
     actions         = ['mark_present', 'mark_absent', 'mark_excused']
 
     fieldsets = (
         ('Attendance', {
-            'fields': ('student', 'course', 'date', 'status', 'notes'),
+            'fields': ('student', 'course_offering', 'date', 'status', 'notes'),
         }),
         ('Recorded By', {
             'fields': ('marked_by',),
@@ -38,7 +33,7 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
     )
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related('student', 'course', 'marked_by')
+        return super().get_queryset(request).select_related('student', 'course_offering__course', 'marked_by')
 
     @admin.display(description='Student')
     def student_link(self, obj):
@@ -47,12 +42,14 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
             obj.student_id, obj.student.full_name
         )
 
-    @admin.display(description='Course')
-    def course_link(self, obj):
-        return format_html(
-            '<a href="/admin/courses/course/{}/change/">{}</a>',
-            obj.course_id, obj.course.title
-        )
+    @admin.display(description='Course Offering')
+    def course_offering_link(self, obj):
+        if obj.course_offering:
+            return format_html(
+                '<a href="/admin/courses/courseoffering/{}/change/">{}</a>',
+                obj.course_offering_id, obj.course_offering
+            )
+        return '—'
 
     @admin.display(description='Status')
     def status_badge(self, obj):
@@ -78,7 +75,6 @@ class AttendanceRecordAdmin(admin.ModelAdmin):
     def notes_preview(self, obj):
         return (obj.notes[:60] + '…') if len(obj.notes) > 60 else obj.notes or '—'
 
-    # ── Actions ──────────────────────────────────────────────────────────
     @admin.action(description='✓ Mark selected as Present')
     def mark_present(self, request, queryset):
         updated = queryset.update(status='present')
