@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useApp } from "@/context/app-context";
 import { useAttendance } from "@/context/attendance-context";
-import { useStudentDashboard } from "@/lib/use-api";
+import { useStudentDashboard, useDashboardStats } from "@/lib/use-api";
 import { mockLessons, mockStudentResults } from "@/lib/mock-data";
 import { ProgressRadialChart, WeeklyActivityChart } from "./dashboard-charts";
 import { StatCard, PremiumCourseCard, VideoCard, mockVideos } from "./dashboard-cards";
@@ -44,7 +44,8 @@ function useStudentStats(studentId: string) {
 export function StudentDashboard() {
   const { currentUser, courses } = useApp();
   const { records } = useAttendance();
-  const { data: apiData } = useStudentDashboard(); // cached — instant on revisit
+  const { data: legacyApiData } = useStudentDashboard(); // role-specific legacy endpoint
+  const { data: statsApiRes } = useDashboardStats(); // unified stats endpoint
 
   const studentId = currentUser?.id != null ? String(currentUser.id) : "u3";
   const stats_data = useStudentStats(studentId);
@@ -60,7 +61,9 @@ export function StudentDashboard() {
   const firstName = currentUser?.first_name ?? currentUser?.full_name?.split(" ")[0] ?? "there";
   const { enrolled, inProgress, completed, hoursLearned, attendanceRate, avgProgress, continueLearning, recommended } = stats_data;
 
-  // Use real API data for stats when available
+  // Use unified stats endpoint if available; fallback to legacy role-specific data
+  const apiData = (statsApiRes && (statsApiRes.data ?? statsApiRes)) ?? legacyApiData;
+
   const enrolledCount  = apiData?.total_enrolled  ?? enrolled.length;
   const completedCount = apiData?.completed_courses ?? completed.length;
 
