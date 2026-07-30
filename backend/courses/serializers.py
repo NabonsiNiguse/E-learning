@@ -1,6 +1,9 @@
 from rest_framework import serializers
 from django.utils.text import slugify
-from .models import Faculty, Department, Course, AcademicSemester, CourseOffering, Lesson
+from .models import (
+    Faculty, Department, Course, AcademicSemester, CourseOffering, Lesson,
+    Assignment, AssignmentSubmission, Quiz, Question, Choice, QuizSubmission, StudentAnswer,
+)
 from users.serializers import UserListSerializer
 
 
@@ -135,3 +138,95 @@ class CourseOfferingSerializer(serializers.ModelSerializer):
             'instructor', 'instructor_detail', 'section_code', 'max_capacity', 'created_at'
         ]
         read_only_fields = ['id', 'created_at']
+
+
+# ---------------------------------------------------------------------------
+# Assignments & Submissions
+# ---------------------------------------------------------------------------
+class AssignmentSerializer(serializers.ModelSerializer):
+    course_detail = CourseListSerializer(source='course', read_only=True)
+
+    class Meta:
+        model = Assignment
+        fields = ['id', 'course', 'course_detail', 'title', 'description', 'due_date', 'total_marks', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class AssignmentSubmissionSerializer(serializers.ModelSerializer):
+    student_detail = UserListSerializer(source='student', read_only=True)
+    assignment_detail = AssignmentSerializer(source='assignment', read_only=True)
+    is_submitted = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AssignmentSubmission
+        fields = [
+            'id', 'student', 'student_detail', 'assignment', 'assignment_detail',
+            'submission_file', 'submission_text', 'grade', 'feedback', 'submitted_at', 'status', 'is_submitted'
+        ]
+        read_only_fields = ['id', 'student', 'submitted_at', 'status']
+
+    def get_is_submitted(self, obj):
+        return obj.status in [AssignmentSubmission.Status.SUBMITTED, AssignmentSubmission.Status.GRADED, AssignmentSubmission.Status.LATE]
+
+
+# ---------------------------------------------------------------------------
+# Quizzes, Questions, Choices & Submissions
+# ---------------------------------------------------------------------------
+class ChoiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Choice
+        fields = ['id', 'question', 'text', 'is_correct']
+        read_only_fields = ['id', 'is_correct']
+
+
+class QuestionSerializer(serializers.ModelSerializer):
+    choices = ChoiceSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Question
+        fields = ['id', 'quiz', 'text', 'question_type', 'order', 'points', 'choices']
+        read_only_fields = ['id']
+
+
+class QuizSerializer(serializers.ModelSerializer):
+    course_detail = CourseListSerializer(source='course', read_only=True)
+    questions = QuestionSerializer(many=True, read_only=True)
+    question_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Quiz
+        fields = ['id', 'course', 'course_detail', 'title', 'description', 'time_limit_minutes', 'is_published', 'created_at', 'updated_at', 'questions', 'question_count']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_question_count(self, obj):
+        return obj.questions.count()
+
+
+class StudentAnswerSerializer(serializers.ModelSerializer):
+    question_detail = QuestionSerializer(source='question', read_only=True)
+    selected_choice_detail = ChoiceSerializer(source='selected_choice', read_only=True)
+
+    class Meta:
+        model = StudentAnswer
+        fields = ['id', 'submission', 'question', 'question_detail', 'selected_choice', 'selected_choice_detail', 'text_answer', 'is_correct', 'points_awarded']
+        read_only_fields = ['id', 'is_correct', 'points_awarded']
+
+
+class QuizSubmissionSerializer(serializers.ModelSerializer):
+    student_detail = UserListSerializer(source='student', read_only=True)
+    quiz_detail = QuizSerializer(source='quiz', read_only=True)
+    answers = StudentAnswerSerializer(many=True, read_only=True)
+    score_percentage = serializers.SerializerMethodField()
+    is_submitted = serializers.SerializerMethodField()
+
+    class Meta:
+        model = QuizSubmission
+        fields = ['id', 'student', 'student_detail', 'quiz', 'quiz_detail', 'score', 'score_percentage', 'submitted_at', 'answers', 'is_submitted']
+        read_only_fields = ['id', 'student', 'submitted_at', 'score', 'answers']
+
+    def get_score_percentage(self, obj):
+        # model stores score already as percentage by grade_submission
+        return float(obj.score) if obj.score is not None else None
+
+    def get_is_submitted(self, obj):
+        return True if obj.submitted_at else False
