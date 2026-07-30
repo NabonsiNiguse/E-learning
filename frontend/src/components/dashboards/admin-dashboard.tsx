@@ -8,16 +8,17 @@ import { useAttendance } from "@/context/attendance-context";
 import { WeeklyActivityChart, EnrollmentBarChart, AttendanceDonutChart } from "./dashboard-charts";
 import { StatCard, PremiumCourseCard, VideoCard, mockVideos } from "./dashboard-cards";
 import { useApp } from "@/context/app-context";
-import { useAdminDashboard } from "@/lib/use-api";
+import { useAdminDashboard, useDashboardStats } from "@/lib/use-api";
 import { cn } from "@/lib/utils";
 
 export function AdminDashboard() {
   const { courses } = useApp();
   const { records } = useAttendance();
   const navigate = useNavigate();
-  const { data: apiData, isLoading } = useAdminDashboard();
+  const legacy = useAdminDashboard();
+  const { data: statsRes, isLoading: statsLoading } = useDashboardStats();
 
-  if (isLoading) {
+  if (legacy.isLoading && statsLoading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -25,12 +26,14 @@ export function AdminDashboard() {
     );
   }
 
-  const totalUsers   = apiData?.totals.users ?? 0;
-  const teachers     = apiData?.totals.teachers ?? 0;
-  const students     = apiData?.totals.students ?? 0;
-  const totalCourses = apiData?.totals.courses ?? courses.length;
-  const published    = apiData?.totals.published_courses ?? courses.filter(c => !c.locked).length;
-  const enrollments  = apiData?.totals.enrollments ?? 0;
+  const apiData = (statsRes && (statsRes.data ?? statsRes)) ?? legacy.data ?? {};
+
+  const totalUsers   = apiData?.totals?.users ?? 0;
+  const teachers     = apiData?.totals?.teachers ?? 0;
+  const students     = apiData?.totals?.students ?? 0;
+  const totalCourses = apiData?.totals?.courses ?? courses.length;
+  const published    = apiData?.totals?.published_courses ?? courses.filter(c => !c.locked).length;
+  const enrollments  = apiData?.totals?.enrollments ?? 0;
   const presentSessions = records.filter(r => r.status === "present" || r.status === "late").length;
   const attendanceRate  = records.length > 0 ? Math.round((presentSessions / records.length) * 100) : 82;
   const topCourses = apiData?.top_courses
