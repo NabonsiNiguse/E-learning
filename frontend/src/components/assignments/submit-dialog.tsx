@@ -26,10 +26,12 @@ export function SubmitDialog({ assignment, open, onClose }: SubmitDialogProps) {
   const [text, setText]         = useState("");
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileSize, setFileSize] = useState<string | null>(null);
+  const [fileObj, setFileObj]     = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleFile = (file: File) => {
+    setFileObj(file);
     setFileName(file.name);
     const size = file.size < 1024 * 1024
       ? `${(file.size / 1024).toFixed(0)} KB`
@@ -51,13 +53,19 @@ export function SubmitDialog({ assignment, open, onClose }: SubmitDialogProps) {
       student_name:  studentName,
       student_avatar: avatar,
       text_response: text.trim(),
+      file:          fileObj ?? null,
       file_name:     fileName,
       file_size:     fileSize,
       is_late:       new Date() > new Date(assignment.due_date),
+    }).then(() => {
+      toast.success("Assignment submitted successfully!");
+      setText(""); setFileName(null); setFileSize(null); setFileObj(null);
+      onClose();
+    }).catch(() => {
+      toast.error("Failed to submit — saved locally.");
+      setText(""); setFileName(null); setFileSize(null); setFileObj(null);
+      onClose();
     });
-    toast.success("Assignment submitted successfully!");
-    setText(""); setFileName(null); setFileSize(null);
-    onClose();
   };
 
   const isPastDue = new Date() > new Date(assignment.due_date);
