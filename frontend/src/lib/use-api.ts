@@ -61,6 +61,15 @@ export function useStudentDashboard() {
   });
 }
 
+// Unified role-aware dashboard stats endpoint
+export function useDashboardStats() {
+  return useQuery({
+    queryKey: ["dashboard","stats"],
+    queryFn:  () => dashboardApi.stats().then((r) => r),
+    staleTime: 1000 * 30, // 30s
+  });
+}
+
 // ─── Courses ──────────────────────────────────────────────────────────────
 export function useCourses(params?: { search?: string; category?: string; status?: string }) {
   return useQuery({
@@ -278,3 +287,16 @@ export function useMarkAllNotificationsRead() {
     onSuccess: () => qc.invalidateQueries({ queryKey: QK.notifications() }),
   });
 }
+
+// ─── Progress mutation: mark a lesson complete ─────────────────────────────
+export function useMarkComplete() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (lessonId: number) => progressApi.markComplete(lessonId),
+    onSuccess: () => {
+      // Invalidate any queries that may depend on progress/lessons
+      qc.invalidateQueries({ predicate: (q) => Array.isArray(q.queryKey) && ["lessons","progress","course"].includes(String(q.queryKey[0])) });
+    },
+  });
+}
+
