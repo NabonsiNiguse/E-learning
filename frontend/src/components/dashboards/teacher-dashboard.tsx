@@ -8,7 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useApp } from "@/context/app-context";
-import { useTeacherDashboard } from "@/lib/use-api";
+import { useTeacherDashboard, useDashboardStats } from "@/lib/use-api";
 import { PerformanceBarChart, AttendanceDonutChart, WeeklyActivityChart } from "./dashboard-charts";
 import { StatCard, VideoCard, mockVideos } from "./dashboard-cards";
 import { cn } from "@/lib/utils";
@@ -44,15 +44,16 @@ function DashboardSkeleton() {
 
 export function TeacherDashboard() {
   const { currentUser } = useApp();
-  const { data, isLoading, isFetching, isError, error, refetch } = useTeacherDashboard();
+  const legacy = useTeacherDashboard();
+  const { data: statsRes, isLoading: statsLoading, isError: statsError } = useDashboardStats();
 
   // ── First-load: no cached data yet ───────────────────────────────────
-  if (isLoading && !data) {
+  if ((legacy.isLoading && !legacy.data) && statsLoading) {
     return <DashboardSkeleton />;
   }
 
   // ── Hard error with no cached data to fall back on ───────────────────
-  if (isError && !data) {
+  if ((legacy.isError && !legacy.data) && statsError) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] gap-4 text-center">
         <div className="h-14 w-14 rounded-2xl bg-destructive/10 flex items-center justify-center">
@@ -60,29 +61,30 @@ export function TeacherDashboard() {
         </div>
         <div>
           <p className="font-semibold text-sm">
-            {(error as any)?.message?.includes("Cannot connect")
+            {(legacy.error as any)?.message?.includes("Cannot connect")
               ? "Backend offline"
               : "Failed to load dashboard"}
           </p>
           <p className="text-xs text-muted-foreground mt-1">
-            {(error as any)?.message?.includes("Cannot connect")
+            {(legacy.error as any)?.message?.includes("Cannot connect")
               ? "Start the Django server and try again."
-              : (error as any)?.message ?? "An unexpected error occurred."}
+              : (legacy.error as any)?.message ?? "An unexpected error occurred."}
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={() => refetch()}>
+        <Button size="sm" variant="outline" onClick={() => legacy.refetch()}>
           <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Retry
         </Button>
       </div>
     );
   }
 
-  // ── Safe data access — data is guaranteed non-null here ──────────────
+  // ── Safe data access — prefer unified stats endpoint when available ───
+  const rawStats = (statsRes && (statsRes.data ?? statsRes)) ?? legacy.data ?? {};
   const firstName     = currentUser?.full_name?.split(" ")[0] ?? "Instructor";
-  const totalStudents = data?.total_students ?? 0;
-  const totalCourses  = data?.total_courses  ?? 0;
-  const totalLessons  = data?.total_lessons  ?? 0;
-  const courses       = data?.courses        ?? [];
+  const totalStudents = rawStats?.total_students ?? 0;
+  const totalCourses  = rawStats?.total_courses  ?? 0;
+  const totalLessons  = rawStats?.total_lessons  ?? 0;
+  const courses       = rawStats?.courses        ?? legacy.data?.courses ?? [];
 
   const stats = [
     {
