@@ -86,7 +86,7 @@ class User(AbstractBaseUser, PermissionsMixin):
 
 
 class TeacherProfile(models.Model):
-    user        = models.OneToOneField(User, on_delete=models.CASCADE, related_name='teacher_profile')
+    user        = models.OneToOneField('User', on_delete=models.CASCADE, related_name='teacher_profile')
     bio         = models.TextField(blank=True)
     expertise   = models.CharField(max_length=255, blank=True)
     website     = models.URLField(blank=True)
@@ -101,7 +101,7 @@ class TeacherProfile(models.Model):
 
 
 class StudentProfile(models.Model):
-    user        = models.OneToOneField(User, on_delete=models.CASCADE, related_name='student_profile')
+    user        = models.OneToOneField('User', on_delete=models.CASCADE, related_name='student_profile')
     bio         = models.TextField(blank=True)
     created_at  = models.DateTimeField(auto_now_add=True)
     updated_at  = models.DateTimeField(auto_now=True)
