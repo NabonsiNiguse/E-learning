@@ -50,3 +50,31 @@ class IsSelfOrAdmin(BasePermission):
     """Allow users to access their own data; admins can access any."""
     def has_object_permission(self, request, view, obj):
         return request.user.is_admin or obj == request.user
+
+
+class IsTeacherOrReadOnly(BasePermission):
+    """Allow full access to teachers, read-only for authenticated non-teachers."""
+    def has_permission(self, request, view):
+        if request.method in SAFE_METHODS:
+            return bool(request.user and request.user.is_authenticated)
+        return bool(request.user and request.user.is_authenticated and request.user.is_teacher)
+
+
+class IsStudentOwner(BasePermission):
+    """Object-level permission to allow students to access only their own objects; teachers/admins allowed."""
+    def has_object_permission(self, request, view, obj):
+        # Allow teachers and admins
+        if getattr(request.user, 'is_teacher', False) or getattr(request.user, 'is_admin', False) or getattr(request.user, 'is_super_admin', False):
+            return True
+        # Students only access their own related objects that have `student` attribute
+        student = getattr(obj, 'student', None)
+        if student is None:
+            # If object is a user, allow self
+            return obj == request.user
+        return student == request.user
+
+
+class IsAdminUser(BasePermission):
+    """Alias permission for admin users (keeps naming from the request)."""
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.is_admin)
