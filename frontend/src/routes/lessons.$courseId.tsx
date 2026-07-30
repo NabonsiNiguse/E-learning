@@ -28,7 +28,8 @@ import {
   DialogFooter as LDialogFooter,
 } from "@/components/ui/dialog";
 import { Label as LLabel } from "@/components/ui/label";
-import { mockLessons, type Lesson, type Course } from "@/lib/mock-data";
+import { type Lesson, type Course } from "@/lib/mock-data";
+import { useLessons, useCourse, useCourseProgress, useMarkComplete } from "@/lib/use-api";
 import { useApp } from "@/context/app-context";
 import { useQA } from "@/context/qa-context";
 import { CourseQAPanel } from "@/components/qa/course-qa-panel";
@@ -1005,10 +1006,46 @@ function LessonPage() {
   const { courses, role, currentUser } = useApp();
   const qaCtx         = useQA();
   const course        = courses.find((c) => c.id === courseId) ?? courses[0];
-  const [lessons, setLessons] = useState<Lesson[]>(mockLessons);
-  const [activeId, setActiveId] = useState(
-    () => mockLessons.find((l) => !l.completed)?.id ?? mockLessons[0].id
-  );
+
+  // If route id is numeric (backend style), use API hooks. Otherwise fall back to local mock data.
+  const numericCourseId = (() => {
+    const n = Number(courseId);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  })();
+
+  const lessonsQuery = useLessons(numericCourseId ?? 0);
+  const progressQuery = useCourseProgress(numericCourseId ?? 0);
+  const courseQuery = useCourse(numericCourseId ?? 0);
+  const markCompleteMut = useMarkComplete();
+
+  const [lessons, setLessons] = useState<Lesson[]>(() => {
+    // keep initial local mock state for teachers/admins and for unauthenticated/non-numeric ids
+    return (typeof window !== "undefined" ? (globalThis as any).__INITIAL_LESSONS__ : undefined) ?? [];
+  });
+
+  // If above global not set, fall back to existing mockLessons for initial render
+  useEffect(() => {
+    if (!lessons || lessons.length === 0) {
+      try { // dynamic import of mock-data only in browser if needed
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const md = require("@/lib/mock-data");
+        setLessons(md.mockLessons);
+      } catch {
+        setLessons([]);
+      }
+    }
+  }, []);
+
+  const [activeId, setActiveId] = useState<string>(() => {
+    try {
+      // default to first not-completed mock lesson
+      const md = require("@/lib/mock-data");
+      return md.mockLessons.find((l: Lesson) => !l.completed)?.id ?? md.mockLessons[0].id;
+    } catch {
+      return "";
+    }
+  });
+
   const [curriculumOpen, setCurriculumOpen] = useState(true);
 
   // Ref that VideoPlayer writes its progress into — Notes panel reads this
@@ -1016,20 +1053,60 @@ function LessonPage() {
 
   const { meta, toggleLike, toggleSave, updateNotes, saveNotes } = useLessonMeta(lessons);
 
+  // When backend progress data is available for a numeric course id, map it into the local Lesson shape
+  useEffect(() => {
+    if (numericCourseId && progressQuery.data && role === "student") {
+      const cp = progressQuery.data as any; // ApiCourseProgress
+      const mapped = cp.lessons.map((l: any) => ({
+        id: String(l.lesson_id),
+        title: l.title,
+        duration: l.duration ?? "00:00",
+        completed: !!l.completed,
+        description: l.description ?? "",
+        type: (l.type as Lesson["type"]) ?? "video",
+        thumbnail: course?.thumbnailImg ?? course?.thumbnail ?? "",
+        resources: [],
+        order: l.order,
+      })) as Lesson[];
+      if (mapped.length > 0) {
+        setLessons(mapped);
+        const firstNotDone = mapped.find((x) => !x.completed);
+        setActiveId(firstNotDone?.id ?? mapped[0].id);
+      }
+    }
+  }, [progressQuery.data, numericCourseId, role, course?.thumbnailImg, course?.thumbnail]);
+
   const activeLesson   = lessons.find((l) => l.id === activeId) ?? lessons[0];
   const activeIdx      = lessons.findIndex((l) => l.id === activeId);
   const prevLesson     = activeIdx > 0 ? lessons[activeIdx - 1] : null;
   const nextLesson     = activeIdx < lessons.length - 1 ? lessons[activeIdx + 1] : null;
   const completedCount = lessons.filter((l) => l.completed).length;
 
-  const markComplete = useCallback((id: string) => {
-    setLessons((p) => p.map((l) => l.id === id ? { ...l, completed: true } : l));
-    toast.success("🎉 Lesson completed!");
-    const idx = lessons.findIndex((l) => l.id === id);
-    if (idx < lessons.length - 1) {
-      setTimeout(() => setActiveId(lessons[idx + 1].id), 700);
+  const handleMarkComplete = useCallback(async (id: string) => {
+    // If the id looks numeric (mapped from API) use mutation; otherwise update local mock state
+    if (/^\d+$/.test(id) && numericCourseId) {
+      try {
+        await markCompleteMut.mutateAsync(Number(id));
+        // Optimistic UI update
+        setLessons((p) => p.map((l) => l.id === id ? { ...l, completed: true } : l));
+        toast.success("🎉 Lesson completed!");
+        const idx = lessons.findIndex((l) => l.id === id);
+        if (idx >= 0 && idx < lessons.length - 1) setTimeout(() => setActiveId(lessons[idx + 1].id), 700);
+      } catch (err: any) {
+        toast.error(err?.message ?? "Failed to mark lesson complete");
+      }
+    } else {
+      setLessons((p) => p.map((l) => l.id === id ? { ...l, completed: true } : l));
+      toast.success("🎉 Lesson completed!");
+      const idx = lessons.findIndex((l) => l.id === id);
+      if (idx < lessons.length - 1) {
+        setTimeout(() => setActiveId(lessons[idx + 1].id), 700);
+      }
     }
-  }, [lessons]);
+  }, [markCompleteMut, lessons, numericCourseId]);
+
+  // Backwards-compatible alias: older code used `markComplete` — keep it working
+  const markComplete = handleMarkComplete;
 
   // Derive current playback timestamp string from the player progress ref
   const getTimestamp = useCallback((): string => {
