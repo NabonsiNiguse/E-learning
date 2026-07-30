@@ -1,16 +1,19 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Avg, Sum, FloatField
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from datetime import timedelta
 
 from users.models import User
 from courses.models import Course, Lesson, CourseOffering
 from enrollments.models import Enrollment
-from progress.models import Progress
+from progress.models import Progress, CourseProgress
 from payments.models import Payment
 from users.permissions import IsAdmin, IsTeacher, IsStudent
+from attendance.models import AttendanceRecord
+from courses.models import Assignment, AssignmentSubmission, Quiz, QuizSubmission
 
 
 class AdminDashboardView(APIView):
@@ -198,6 +201,33 @@ class StudentDashboardView(APIView):
         locked = [e for e in enrolled_data if e['enrollment_status'] == 'locked']
         completed = [e for e in enrolled_data if e['enrollment_status'] == 'completed']
 
+        # Additional stats requested for unified /stats/ endpoint
+        # Pending assignments/quizzes not submitted
+        pending_assignments = 0
+        pending_quizzes = 0
+        if course_ids:
+            pending_assignments = Assignment.objects.filter(course_id__in=course_ids).exclude(submissions__student=student).count()
+            pending_quizzes = Quiz.objects.filter(course_id__in=course_ids, is_published=True).exclude(submissions__student=student).count()
+
+        # Attendance rate
+        attendance_agg = AttendanceRecord.objects.filter(student=student).aggregate(
+            total=Count('id'), present=Count('id', filter=Q(status='present'))
+        )
+        total_att = attendance_agg.get('total') or 0
+        present_att = attendance_agg.get('present') or 0
+        attendance_rate = round((present_att / total_att * 100), 1) if total_att else 0.0
+
+        # Recent grades (combine assignment and quiz submissions)
+        recent_assign = AssignmentSubmission.objects.filter(student=student, grade__isnull=False).order_by('-submitted_at').values('id', 'assignment__title', 'grade', 'submitted_at')[:5]
+        recent_quiz = QuizSubmission.objects.filter(student=student, score__isnull=False).order_by('-submitted_at').values('id', 'quiz__title', 'score', 'submitted_at')[:5]
+
+        recent = []
+        for a in recent_assign:
+            recent.append({'type': 'assignment', 'title': a['assignment__title'], 'score': float(a['grade']), 'date': a['submitted_at']})
+        for q in recent_quiz:
+            recent.append({'type': 'quiz', 'title': q['quiz__title'], 'score': float(q['score']), 'date': q['submitted_at']})
+        recent = sorted(recent, key=lambda x: x['date'], reverse=True)[:10]
+
         return Response({
             'success': True,
             'data': {
@@ -206,5 +236,128 @@ class StudentDashboardView(APIView):
                 'locked_courses': len(locked),
                 'completed_courses': len(completed),
                 'enrollments': enrolled_data,
+                'pending_assignments': pending_assignments,
+                'pending_quizzes': pending_quizzes,
+                'attendance_rate': attendance_rate,
+                'recent_grades': recent,
             }
         })
+
+
+# ---------------------------------------------------------------------------
+# Unified role-based stats endpoint
+# ---------------------------------------------------------------------------
+class DashboardStatsView(APIView):
+    """
+    GET /api/v1/dashboard/stats/
+    Returns role-based live statistics for ADMIN, TEACHER, STUDENT.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        # ADMIN stats
+        if user.is_admin:
+            # Users counts
+            user_counts = User.objects.aggregate(
+                total=Coalesce(Count('id'), 0),
+                teachers=Coalesce(Count('id', filter=Q(role='teacher')), 0),
+                students=Coalesce(Count('id', filter=Q(role='student')), 0),
+            )
+
+            active_courses = Course.objects.filter(status='published').count()
+            total_enrollments = Enrollment.objects.count()
+
+            # Platform-wide attendance
+            att = AttendanceRecord.objects.aggregate(
+                total=Coalesce(Count('id'), 0),
+                present=Coalesce(Count('id', filter=Q(status='present')), 0),
+            )
+            att_total = att['total'] or 0
+            att_present = att['present'] or 0
+            avg_attendance = round((att_present / att_total * 100), 1) if att_total else 0.0
+
+            return Response({'success': True, 'role': 'admin', 'data': {
+                'users_total': int(user_counts['total']),
+                'teachers': int(user_counts['teachers']),
+                'students': int(user_counts['students']),
+                'active_courses': int(active_courses),
+                'total_enrollments': int(total_enrollments),
+                'platform_average_attendance': avg_attendance,
+            }})
+
+        # TEACHER stats
+        if user.is_teacher:
+            teacher = user
+            courses_qs = Course.objects.filter(offerings__instructor=teacher).distinct()
+            course_count = courses_qs.count()
+
+            total_students = Enrollment.objects.filter(course_offering__instructor=teacher, status__in=['active','completed']).values('student').distinct().count()
+
+            pending_submissions = AssignmentSubmission.objects.filter(assignment__course__offerings__instructor=teacher, status='submitted').count()
+
+            att = AttendanceRecord.objects.filter(course_offering__instructor=teacher).aggregate(
+                total=Coalesce(Count('id'), 0),
+                present=Coalesce(Count('id', filter=Q(status='present')), 0),
+            )
+            att_total = att['total'] or 0
+            att_present = att['present'] or 0
+            avg_attendance = round((att_present / att_total * 100), 1) if att_total else 0.0
+
+            return Response({'success': True, 'role': 'teacher', 'data': {
+                'course_count': int(course_count),
+                'total_unique_students': int(total_students),
+                'pending_submissions_to_grade': int(pending_submissions),
+                'average_attendance': avg_attendance,
+            }})
+
+        # STUDENT stats
+        if user.is_student:
+            student = user
+            enroll_count = Enrollment.objects.filter(student=student).count()
+            # course progress
+            progresses = CourseProgress.objects.filter(student=student).select_related('course')
+            progress_list = []
+            for p in progresses:
+                progress_list.append({
+                    'course_id': p.course_id,
+                    'course_title': p.course.title,
+                    'percent_complete': float(p.percent_complete),
+                })
+
+            # pending assignments/quizzes
+            course_ids = list(Enrollment.objects.filter(student=student).values_list('course_offering__course_id', flat=True))
+            pending_assignments = Assignment.objects.filter(course_id__in=course_ids).exclude(submissions__student=student).count() if course_ids else 0
+            pending_quizzes = Quiz.objects.filter(course_id__in=course_ids, is_published=True).exclude(submissions__student=student).count() if course_ids else 0
+
+            # attendance rate
+            att = AttendanceRecord.objects.filter(student=student).aggregate(
+                total=Coalesce(Count('id'), 0),
+                present=Coalesce(Count('id', filter=Q(status='present')), 0),
+            )
+            att_total = att['total'] or 0
+            att_present = att['present'] or 0
+            attendance_rate = round((att_present / att_total * 100), 1) if att_total else 0.0
+
+            # recent grades
+            recent_assign = AssignmentSubmission.objects.filter(student=student, grade__isnull=False).order_by('-submitted_at').values('assignment__title', 'grade', 'submitted_at')[:5]
+            recent_quiz = QuizSubmission.objects.filter(student=student, score__isnull=False).order_by('-submitted_at').values('quiz__title', 'score', 'submitted_at')[:5]
+            recent = []
+            for a in recent_assign:
+                recent.append({'type': 'assignment', 'title': a['assignment__title'], 'score': float(a['grade']), 'date': a['submitted_at']})
+            for q in recent_quiz:
+                recent.append({'type': 'quiz', 'title': q['quiz__title'], 'score': float(q['score']), 'date': q['submitted_at']})
+            recent = sorted(recent, key=lambda x: x['date'], reverse=True)[:10]
+
+            return Response({'success': True, 'role': 'student', 'data': {
+                'enrolled_courses_count': int(enroll_count),
+                'course_progress': progress_list,
+                'pending_assignments': int(pending_assignments),
+                'pending_quizzes': int(pending_quizzes),
+                'attendance_rate': attendance_rate,
+                'recent_grades': recent,
+            }})
+
+        # Fallback
+        return Response({'success': False, 'message': 'Unsupported role for dashboard stats.'}, status=403)
