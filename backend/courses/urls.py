@@ -9,6 +9,10 @@ from .views import (
     CoursePublishView,
     LessonListCreateView,
     LessonDetailView,
+    QuizViewSet,
+    QuizSubmissionViewSet,
+    AssignmentViewSet,
+    AssignmentSubmissionViewSet,
 )
 
 urlpatterns = [
@@ -31,4 +35,25 @@ urlpatterns = [
     
     path('offerings/', CourseOfferingViewSet.as_view({'get': 'list', 'post': 'create'}), name='offering-list'),
     path('offerings/<int:pk>/', CourseOfferingViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'}), name='offering-detail'),
+
+    # Quizzes
+    path('quizzes/', QuizViewSet.as_view({'get': 'list', 'post': 'create'}), name='quiz-list'),
+    path('quizzes/<int:pk>/', QuizViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'}), name='quiz-detail'),
+    path('quizzes/<int:pk>/submit/', QuizViewSet.as_view({'post': 'submit'}), name='quiz-submit'),
+
+    # Quiz submissions (viewing & rescoring)
+    path('quiz-submissions/', QuizSubmissionViewSet.as_view({'get': 'list'}), name='quizsubmission-list'),
+    path('quiz-submissions/<int:pk>/', QuizSubmissionViewSet.as_view({'get': 'retrieve'}), name='quizsubmission-detail'),
+    path('quiz-submissions/<int:pk>/rescore/', QuizSubmissionViewSet.as_view({'post': 'rescore'}), name='quizsubmission-rescore'),
+
+    # Assignments
+    path('assignments/', AssignmentViewSet.as_view({'get': 'list', 'post': 'create'}), name='assignment-list'),
+    path('assignments/<int:pk>/', AssignmentViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'}), name='assignment-detail'),
+    path('assignments/<int:pk>/submit/', AssignmentViewSet.as_view({'post': 'submit'}), name='assignment-submit'),
+
+    # Assignment submissions & grading
+    path('submissions/', AssignmentSubmissionViewSet.as_view({'get': 'list', 'post': 'create'}), name='submission-list'),
+    path('submissions/<int:pk>/', AssignmentSubmissionViewSet.as_view({'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'}), name='submission-detail'),
+    path('submissions/<int:pk>/grade/', AssignmentSubmissionViewSet.as_view({'post': 'grade'}), name='submission-grade'),
 ]
+
