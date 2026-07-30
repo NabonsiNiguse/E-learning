@@ -171,8 +171,9 @@ export async function apiFetch<T>(
   // Non-browser fallback only (Postman, automated tests).
   // Normal browser requests rely entirely on the httpOnly cookie.
   if (bearerToken) {
-    headers["Authorization"] = `Bearer ${bearerToken}`;
+    headers["Authorization"] = "Bearer " + bearerToken;
   }
+    headers["Authorization"] = `Bearer ${bearerToken}`;
 
   const controller = new AbortController();
   const timeoutId  = setTimeout(() => controller.abort(), 10_000);
@@ -304,6 +305,39 @@ export const usersApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Profile helper (GET /users/profile/ and PATCH with optional avatar upload)
+// Uses cookie-based auth (credentials: include). If a File is included we send
+// multipart/form-data via fetch so boundary is preserved.
+// ---------------------------------------------------------------------------
+export const profileApi = {
+  get: () => apiFetch<AuthUser>("/users/profile/"),
+  update: async (payload: { first_name?: string; last_name?: string; student_profile?: { bio?: string }; teacher_profile?: { bio?: string; expertise?: string; website?: string }; avatar?: File | null }) => {
+    if (payload.avatar instanceof File) {
+      const fd = new FormData();
+      if (payload.first_name) fd.append("first_name", payload.first_name);
+      if (payload.last_name) fd.append("last_name", payload.last_name);
+      if (payload.student_profile?.bio) fd.append("student_profile[bio]", payload.student_profile.bio);
+      if (payload.teacher_profile?.bio) fd.append("teacher_profile[bio]", payload.teacher_profile.bio);
+      if (payload.teacher_profile?.expertise) fd.append("teacher_profile[expertise]", payload.teacher_profile.expertise);
+      if (payload.teacher_profile?.website) fd.append("teacher_profile[website]", payload.teacher_profile.website);
+      fd.append("avatar", payload.avatar);
+      const res = await fetch(`${BASE}/users/profile/`, { method: "PATCH", body: fd, credentials: "include" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new ApiError(res.status, body?.message ?? body?.detail ?? "Profile update failed", body?.errors ?? {});
+      }
+      return res.json();
+    }
+    const body: Record<string, any> = {};
+    if (payload.first_name) body.first_name = payload.first_name;
+    if (payload.last_name) body.last_name = payload.last_name;
+    if (payload.student_profile) body.student_profile = payload.student_profile;
+    if (payload.teacher_profile) body.teacher_profile = payload.teacher_profile;
+    return apiFetch<AuthUser>(`/users/profile/`, { method: "PATCH", body: JSON.stringify(body) });
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Notifications  —  /api/v1/notifications/
 // ---------------------------------------------------------------------------
 export const notificationsApi = {
@@ -365,9 +399,12 @@ export interface StudentDashboardData {
   }>;
 }
 export const dashboardApi = {
+  // Legacy role-specific endpoints (kept for backward compatibility)
   admin:   () => apiFetch<{ success: boolean; data: AdminDashboardData }>("/dashboard/admin/"),
   teacher: () => apiFetch<{ success: boolean; data: TeacherDashboardData }>("/dashboard/teacher/"),
   student: () => apiFetch<{ success: boolean; data: StudentDashboardData }>("/dashboard/student/"),
+  // Unified, role-aware stats endpoint (Phase 3)
+  stats:   () => apiFetch<any>("/dashboard/stats/"),
 };
 
 // ---------------------------------------------------------------------------
@@ -424,6 +461,41 @@ export const lessonsApi = {
     apiFetch<ApiLesson>(`/courses/${courseId}/lessons/${lessonId}/`, { method: "PATCH", body: JSON.stringify(data) }),
   delete: (courseId: number, lessonId: number) =>
     apiFetch<{ success: boolean; message: string }>(`/courses/${courseId}/lessons/${lessonId}/`, { method: "DELETE" }),
+};
+
+// ---------------------------------------------------------------------------
+// Assignments  —  /api/v1/courses/assignments/ and /api/v1/courses/submissions/
+// ---------------------------------------------------------------------------
+export const assignmentsApi = {
+  list: () => apiFetch<PaginatedResponse<any>>(`/courses/assignments/`),
+  detail: (id: number) => apiFetch<any>(`/courses/assignments/${id}/`),
+  create: (data: any) => apiFetch<any>(`/courses/assignments/`, { method: "POST", body: JSON.stringify(data) }),
+  update: (id: number, data: any) => apiFetch<any>(`/courses/assignments/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+  delete: (id: number) => apiFetch<any>(`/courses/assignments/${id}/`, { method: "DELETE" }),
+  // submit supports FormData for file uploads; use direct fetch to preserve multipart boundaries
+  submit: async (id: number, payload: { text_response?: string; file?: File | null; student_id?: number; student_name?: string }) => {
+    // If a file is provided, use multipart/form-data
+    if (payload.file instanceof File) {
+      const fd = new FormData();
+      if (payload.text_response) fd.append("text_response", payload.text_response);
+      fd.append("file", payload.file);
+      if (payload.student_id) fd.append("student", String(payload.student_id));
+      if (payload.student_name) fd.append("student_name", payload.student_name);
+      const res = await fetch(`${BASE}/courses/assignments/${id}/submit/`, { method: "POST", body: fd, credentials: "include" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new ApiError(res.status, body?.message ?? body?.detail ?? "Submit failed", body?.errors ?? {});
+      }
+      return res.json();
+    }
+    // Otherwise send JSON
+    return apiFetch<any>(`/courses/assignments/${id}/submit/`, { method: "POST", body: JSON.stringify(payload) });
+  },
+  submissions: {
+    list: () => apiFetch<PaginatedResponse<any>>(`/courses/submissions/`),
+    detail: (id: number) => apiFetch<any>(`/courses/submissions/${id}/`),
+    grade: (id: number, data: { score: number; feedback?: string }) => apiFetch<any>(`/courses/submissions/${id}/grade/`, { method: "POST", body: JSON.stringify(data) }),
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -509,4 +581,21 @@ export const attendanceApi = {
     apiFetch<{ success: boolean; message: string; errors: unknown[] }>(
       "/attendance/bulk/", { method: "POST", body: JSON.stringify({ course: courseId, date, records }) }),
   summary: (courseId: number) => apiFetch<ApiAttendanceSummary>(`/attendance/summary/?course=${courseId}`),
+};
+
+// ---------------------------------------------------------------------------
+// Quizzes  —  /api/v1/courses/quizzes/  and /api/v1/courses/quiz-submissions/
+// ---------------------------------------------------------------------------
+export const quizzesApi = {
+  list: () => apiFetch<PaginatedResponse<any>>(`/courses/quizzes/`),
+  detail: (id: number) => apiFetch<any>(`/courses/quizzes/${id}/`),
+  create: (data: any) => apiFetch<any>(`/courses/quizzes/`, { method: "POST", body: JSON.stringify(data) }),
+  update: (id: number, data: any) => apiFetch<any>(`/courses/quizzes/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+  delete: (id: number) => apiFetch<any>(`/courses/quizzes/${id}/`, { method: "DELETE" }),
+  submit: (id: number, answers: any[]) => apiFetch<any>(`/courses/quizzes/${id}/submit/`, { method: "POST", body: JSON.stringify({ answers }) }),
+  submissions: {
+    list: () => apiFetch<PaginatedResponse<any>>(`/courses/quiz-submissions/`),
+    detail: (id: number) => apiFetch<any>(`/courses/quiz-submissions/${id}/`),
+    rescore: (id: number, payload: any) => apiFetch<any>(`/courses/quiz-submissions/${id}/rescore/`, { method: "POST", body: JSON.stringify(payload) }),
+  },
 };
