@@ -1,340 +1,209 @@
 """
 Management command: python manage.py seed
 Seeds the database with realistic sample data for development/testing.
+
+This command creates:
+ - 1 Admin (admin@elearn.com / admin123)
+ - 2 Teachers (alice.morgan@example.com, bob.taylor@example.com)
+ - 5 Students (dan.smith@example.com, emma.jones@example.com, liam.brown@example.com, olivia.green@example.com, noah.white@example.com)
+ - 3 Courses, each with modules, lessons, 1 quiz (5 questions), and 1 assignment
+ - CourseOfferings, Enrollments, QuizSubmissions, AssignmentSubmissions (some graded), AttendanceRecords, Notifications
 """
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.utils import timezone
+
+# Import models
 from users.models import User, TeacherProfile, StudentProfile
-from courses.models import Course, Lesson
+from courses.models import (Course, Module, Lesson, Assignment, AssignmentSubmission,
+                            Quiz, Question, Choice, QuizSubmission, StudentAnswer,
+                            AcademicSemester, CourseOffering)
 from enrollments.models import Enrollment
-from progress.models import Progress
+from progress.models import Progress, CourseProgress
 from payments.models import Payment
+from attendance.models import AttendanceRecord
 from notifications.models import Notification
+
+import datetime
 import uuid
 
 
+ADMIN_CREDENTIALS = {'email': 'admin@elearn.com', 'password': 'admin123', 'first_name': 'Platform', 'last_name': 'Admin'}
 TEACHERS = [
-    {'email': 'nabonsi@learnly.io',  'first_name': 'Nabonsi', 'last_name': 'Niguse',
-     'bio': 'Full-stack developer and educator with 8 years of experience.', 'expertise': 'Web Development'},
-    {'email': 'lemi@learnly.io',     'first_name': 'Lemi',    'last_name': 'Melkamu',
-     'bio': 'UI/UX designer and product strategist.', 'expertise': 'Design & Marketing'},
+    {'email': 'alice.morgan@example.com', 'first_name': 'Alice', 'last_name': 'Morgan', 'bio': 'Senior Software Engineer', 'expertise': 'Web Development'},
+    {'email': 'bob.taylor@example.com',   'first_name': 'Bob',   'last_name': 'Taylor', 'bio': 'Data Scientist & Instructor', 'expertise': 'Data Science'},
 ]
-
 STUDENTS = [
-    {'email': 'keab@learnly.io',    'first_name': 'Keab',    'last_name': 'Niguse'},
-    {'email': 'eyob@learnly.io',    'first_name': 'Eyob',    'last_name': 'Haile'},
-    {'email': 'mikiyas@learnly.io', 'first_name': 'Mikiyas', 'last_name': 'Niguse'},
-    {'email': 'niguse@learnly.io',  'first_name': 'Niguse',  'last_name': 'Tsegaye'},
-    {'email': 'john@learnly.io',    'first_name': 'John',    'last_name': 'Wabskill'},
+    {'email': 'dan.smith@example.com',   'first_name': 'Dan',    'last_name': 'Smith'},
+    {'email': 'emma.jones@example.com',  'first_name': 'Emma',   'last_name': 'Jones'},
+    {'email': 'liam.brown@example.com',  'first_name': 'Liam',   'last_name': 'Brown'},
+    {'email': 'olivia.green@example.com','first_name': 'Olivia', 'last_name': 'Green'},
+    {'email': 'noah.white@example.com',  'first_name': 'Noah',   'last_name': 'White'},
 ]
 
-COURSES_DATA = [
+COURSES_SPEC = [
     {
-        'title': 'Modern Web Development',
-        'description': 'Master React, TypeScript and modern tooling to ship production apps.',
-        'category': 'Development', 'is_premium': False, 'price': 0,
-        'status': 'published', 'tags': 'react,typescript,web',
-        'lessons': [
-            {'title': 'Introduction & Setup',    'order': 1, 'duration_min': 8,  'status': 'published',
-             'description': 'Get your development environment ready.',
-             'video_url': 'https://www.youtube-nocookie.com/embed/BYbgopx44vo'},
-            {'title': 'Components & Props',      'order': 2, 'duration_min': 12, 'status': 'published',
-             'description': 'Build reusable UI components.',
-             'video_url': 'https://www.youtube-nocookie.com/embed/fYq5PXgSsbE'},
-            {'title': 'State and Hooks',         'order': 3, 'duration_min': 15, 'status': 'published',
-             'description': 'Master useState and useEffect.',
-             'video_url': 'https://www.youtube-nocookie.com/embed/3VClygDRSsU'},
-            {'title': 'Routing Patterns',        'order': 4, 'duration_min': 11, 'status': 'published',
-             'description': 'Build multi-page apps with React Router.',
-             'video_url': 'https://www.youtube-nocookie.com/embed/nViEqpgwxHE'},
-            {'title': 'Data Fetching',           'order': 5, 'duration_min': 18, 'status': 'published',
-             'description': 'Fetch data from REST APIs.',
-             'video_url': 'https://www.youtube-nocookie.com/embed/AhSvKGTh28Q'},
-        ],
-    },
-    {
-        'title': 'UI/UX Design Foundations',
-        'description': 'Learn the principles of beautiful, usable interface design.',
-        'category': 'Design', 'is_premium': False, 'price': 0,
-        'status': 'published', 'tags': 'ux,design,figma',
-        'lessons': [
-            {'title': 'Design Principles',       'order': 1, 'duration_min': 14, 'status': 'published',
-             'description': 'Core principles of visual design.',
-             'video_url': 'https://www.youtube-nocookie.com/embed/YyN0YTmmC3I'},
-            {'title': 'Wireframing with Figma',  'order': 2, 'duration_min': 20, 'status': 'published',
-             'description': 'Build wireframes and prototypes.',
-             'video_url': 'https://www.youtube-nocookie.com/embed/Iqf4J2eDMio'},
-            {'title': 'Color & Typography',      'order': 3, 'duration_min': 16, 'status': 'published',
-             'description': 'Choosing colors and fonts that work.',
-             'video_url': 'https://www.youtube-nocookie.com/embed/txMdrV1Ut64'},
-        ],
+        'title': 'Full-Stack Web Development',
+        'description': 'From frontend to backend: build production-ready web apps.',
+        'is_premium': False,
+        'price': 0,
+        'modules': [
+            {'title': 'Frontend Basics', 'lessons': ['HTML & CSS', 'JavaScript Basics']},
+            {'title': 'Frontend Frameworks', 'lessons': ['React Intro', 'State & Props']},
+            {'title': 'Backend & APIs', 'lessons': ['Django REST', 'Authentication']},
+        ]
     },
     {
         'title': 'Data Science with Python',
-        'description': 'From pandas to ML — build a real data project end-to-end.',
-        'category': 'Data', 'is_premium': True, 'price': 69,
-        'status': 'published', 'tags': 'python,data,ml',
-        'lessons': [
-            {'title': 'Python for Data Science',  'order': 1, 'duration_min': 20, 'status': 'published',
-             'description': 'Python basics for data work.',
-             'video_url': 'https://www.youtube-nocookie.com/embed/AhSvKGTh28Q'},
-            {'title': 'Pandas & NumPy',           'order': 2, 'duration_min': 35, 'status': 'published',
-             'description': 'Data manipulation with pandas.',
-             'video_url': 'https://www.youtube-nocookie.com/embed/txMdrV1Ut64'},
-            {'title': 'Data Visualisation',       'order': 3, 'duration_min': 28, 'status': 'published',
-             'description': 'Charts and graphs with matplotlib.',
-             'video_url': 'https://www.youtube-nocookie.com/embed/BYbgopx44vo'},
-        ],
+        'description': 'Analyze data and build ML models using Python.',
+        'is_premium': True,
+        'price': 49.99,
+        'modules': [
+            {'title': 'Python for Data', 'lessons': ['Python Basics', 'Pandas Intro']},
+            {'title': 'Data Visualization', 'lessons': ['Matplotlib', 'Seaborn']},
+            {'title': 'Intro to ML', 'lessons': ['Supervised Learning', 'Model Evaluation']},
+        ]
     },
     {
-        'title': 'Digital Marketing Mastery',
-        'description': 'Grow brands with SEO, paid ads, and content strategy.',
-        'category': 'Marketing', 'is_premium': False, 'price': 0,
-        'status': 'published', 'tags': 'marketing,seo,ads',
-        'lessons': [
-            {'title': 'SEO Fundamentals',         'order': 1, 'duration_min': 18, 'status': 'published',
-             'description': 'On-page and off-page SEO.',
-             'video_url': 'https://www.youtube-nocookie.com/embed/YyN0YTmmC3I'},
-            {'title': 'Paid Advertising',         'order': 2, 'duration_min': 22, 'status': 'published',
-             'description': 'Google Ads and Meta Ads basics.',
-             'video_url': 'https://www.youtube-nocookie.com/embed/Iqf4J2eDMio'},
-        ],
+        'title': 'UX & Product Design',
+        'description': 'Design delightful products with great UX practices.',
+        'is_premium': False,
+        'price': 0,
+        'modules': [
+            {'title': 'Design Principles', 'lessons': ['Color & Typography', 'Layout']},
+            {'title': 'Research', 'lessons': ['User Research', 'Personas']},
+            {'title': 'Prototyping', 'lessons': ['Wireframes', 'Interactive Prototypes']},
+        ]
     },
 ]
 
 
 class Command(BaseCommand):
-    help = 'Seed the database with Ethiopian-named sample data.'
+    help = 'Seed the database with sample e-learning data'
 
     @transaction.atomic
     def handle(self, *args, **options):
-        self.stdout.write('Seeding database...')
+        self.stdout.write('Starting database seeding...')
 
-        # ── Admin ──────────────────────────────────────────────────────────
-        admin, _ = User.objects.get_or_create(
-            email='ermiyas@learnly.io',
-            defaults={
-                'first_name': 'Ermiyas', 'last_name': 'Mengistu',
-                'role': User.Role.ADMIN, 'is_staff': True, 'is_superuser': True,
-            }
-        )
-        admin.first_name = 'Ermiyas'
-        admin.last_name  = 'Mengistu'
-        admin.set_password('Admin@1234')
+        # Admin
+        admin, _ = User.objects.get_or_create(email=ADMIN_CREDENTIALS['email'], defaults={
+            'first_name': ADMIN_CREDENTIALS['first_name'], 'last_name': ADMIN_CREDENTIALS['last_name'],
+            'role': User.Role.ADMIN, 'is_staff': True, 'is_superuser': True,
+        })
+        admin.set_password(ADMIN_CREDENTIALS['password'])
         admin.save()
-        self.stdout.write(f'  Admin: {admin.email}')
+        self.stdout.write(f'Created admin: {admin.email}')
 
-        # ── Super Admin ────────────────────────────────────────────────────
-        super_admin, _ = User.objects.get_or_create(
-            email='academic@learnly.io',
-            defaults={
-                'first_name': 'Academic', 'last_name': 'Manager',
-                'role': User.Role.SUPER_ADMIN, 'is_staff': True, 'is_superuser': True,
-            }
-        )
-        super_admin.first_name = 'Academic'
-        super_admin.last_name  = 'Manager'
-        super_admin.set_password('SuperAdmin@1234')
-        super_admin.save()
-        self.stdout.write(f'  Super Admin: {super_admin.email}')
-
-        # ── Teachers ───────────────────────────────────────────────────────
-        teacher_users = []
+        # Teachers
+        teachers = []
         for t in TEACHERS:
-            user, _ = User.objects.get_or_create(
-                email=t['email'],
-                defaults={
-                    'first_name': t['first_name'], 'last_name': t['last_name'],
-                    'role': User.Role.TEACHER,
-                }
-            )
-            user.first_name = t['first_name']
-            user.last_name  = t['last_name']
+            user, _ = User.objects.get_or_create(email=t['email'], defaults={
+                'first_name': t['first_name'], 'last_name': t['last_name'], 'role': User.Role.TEACHER,
+            })
             user.set_password('Teacher@1234')
             user.save()
-            profile, _ = TeacherProfile.objects.get_or_create(user=user)
-            profile.bio       = t['bio']
-            profile.expertise = t['expertise']
-            profile.save()
-            teacher_users.append(user)
-            self.stdout.write(f'  Teacher: {user.email}')
+            TeacherProfile.objects.get_or_create(user=user, defaults={'bio': t.get('bio', ''), 'expertise': t.get('expertise', '')})
+            teachers.append(user)
+            self.stdout.write(f'Created teacher: {user.email}')
 
-        # ── Students ───────────────────────────────────────────────────────
-        student_users = []
+        # Students
+        students = []
         for s in STUDENTS:
-            user, _ = User.objects.get_or_create(
-                email=s['email'],
-                defaults={
-                    'first_name': s['first_name'], 'last_name': s['last_name'],
-                    'role': User.Role.STUDENT,
-                }
-            )
-            user.first_name = s['first_name']
-            user.last_name  = s['last_name']
+            user, _ = User.objects.get_or_create(email=s['email'], defaults={
+                'first_name': s['first_name'], 'last_name': s['last_name'], 'role': User.Role.STUDENT,
+            })
             user.set_password('Student@1234')
             user.save()
             StudentProfile.objects.get_or_create(user=user)
-            student_users.append(user)
-            self.stdout.write(f'  Student: {user.email}')
+            students.append(user)
+            self.stdout.write(f'Created student: {user.email}')
 
-        # ── Courses & Lessons ──────────────────────────────────────────────
+        # Academic semester and offerings
+        today = datetime.date.today()
+        semester, _ = AcademicSemester.objects.get_or_create(year=today.year, semester='Summer', defaults={'is_active': True})
+
         created_courses = []
-        for idx, course_data in enumerate(COURSES_DATA):
-            teacher  = teacher_users[idx % len(teacher_users)]
-            lessons  = course_data.pop('lessons')
-            slug_base = course_data['title'].lower().replace(' ', '-')
-            slug, n  = slug_base, 1
-            while Course.objects.filter(slug=slug).exclude(
-                teacher=teacher, title=course_data['title']
-            ).exists():
-                slug = f'{slug_base}-{n}'; n += 1
+        for idx, spec in enumerate(COURSES_SPEC):
+            slug_base = spec['title'].lower().replace(' ', '-')
+            slug = slug_base
+            i = 1
+            while Course.objects.filter(slug=slug).exists():
+                slug = f'{slug_base}-{i}'; i += 1
 
-            course, _ = Course.objects.get_or_create(
-                title=course_data['title'],
-                teacher=teacher,
-                defaults={**course_data, 'slug': slug, 'created_by': teacher},
-            )
+            creator = teachers[idx % len(teachers)]
+            course, _ = Course.objects.get_or_create(title=spec['title'], defaults={
+                'description': spec['description'], 'is_premium': spec['is_premium'], 'price': spec['price'],
+                'slug': slug, 'created_by': creator,
+            })
             created_courses.append(course)
-            self.stdout.write(f'  Course: {course.title} → {teacher.email}')
+            self.stdout.write(f'Created course: {course.title}')
 
-            for lesson_data in lessons:
-                Lesson.objects.get_or_create(
-                    course=course,
-                    order=lesson_data['order'],
-                    defaults={**lesson_data, 'created_by': teacher},
-                )
+            # Course offering
+            offering, _ = CourseOffering.objects.get_or_create(course=course, semester=semester, section_code='A', defaults={'instructor': creator})
 
-        # ── Enrollments & Progress ─────────────────────────────────────────
-        free_courses    = [c for c in created_courses if not c.is_premium]
-        premium_courses = [c for c in created_courses if c.is_premium]
+            # Modules and Lessons
+            order_l = 1
+            for m_idx, m in enumerate(spec['modules'], start=1):
+                module, _ = Module.objects.get_or_create(course=course, title=m['title'], defaults={'order': m_idx})
+                for lesson_title in m['lessons']:
+                    Lesson.objects.get_or_create(course=course, order=order_l, defaults={'title': lesson_title, 'description': lesson_title, 'created_by': creator, 'status': 'published'})
+                    order_l += 1
 
-        # First 3 students enroll in free courses and complete some lessons
-        for student in student_users[:3]:
-            for course in free_courses:
-                enrollment, _ = Enrollment.objects.get_or_create(
-                    student=student, course=course,
-                    defaults={'status': Enrollment.Status.ACTIVE},
-                )
-                lessons = list(course.lessons.filter(status='published').order_by('order')[:2])
-                for lesson in lessons:
-                    Progress.objects.get_or_create(
-                        student=student, lesson=lesson,
-                        defaults={'completed': True},
-                    )
+            # Quiz with 5 questions
+            quiz, _ = Quiz.objects.get_or_create(course=course, title=f'{course.title} — Quiz 1', defaults={'is_published': True})
+            for qn in range(1, 6):
+                question, _ = Question.objects.get_or_create(quiz=quiz, order=qn, defaults={'text': f'Question {qn} for {course.title}', 'question_type': Question.Type.MCQ, 'points': 1})
+                # ensure exactly 4 choices
+                if question.choices.count() < 4:
+                    for ci in range(4):
+                        Choice.objects.create(question=question, text=f'Option {ci+1}', is_correct=(ci == 0))
 
-        # Last 2 students pay for premium courses
-        for student in student_users[3:]:
-            for course in premium_courses[:1]:
-                ref = f'PAY-SEED-{uuid.uuid4().hex[:8].upper()}'
-                Payment.objects.get_or_create(
-                    student=student, course=course,
-                    defaults={
-                        'amount': course.price, 'status': Payment.Status.SUCCESS,
-                        'reference': ref, 'payment_method': 'mock_card',
-                    }
-                )
-                Enrollment.objects.get_or_create(
-                    student=student, course=course,
-                    defaults={'status': Enrollment.Status.ACTIVE},
-                )
+            # Assignment
+            assignment, _ = Assignment.objects.get_or_create(course=course, title=f'{course.title} — Assignment 1', defaults={'total_marks': 100})
 
-        # ── Notifications ──────────────────────────────────────────────────
-        for student in student_users[:3]:
-            Notification.objects.get_or_create(
-                recipient=student,
-                title='Welcome to Learnly!',
-                defaults={
-                    'notification_type': 'system',
-                    'message': 'Start exploring courses and track your progress.',
-                }
-            )
+            # Enroll some students
+            for student in students[:4]:
+                Enrollment.objects.get_or_create(student=student, course_offering=offering, defaults={'status': Enrollment.Status.ACTIVE})
 
-        self.stdout.write(self.style.SUCCESS('\n✅ Database seeded successfully!'))
-        self.stdout.write('\nCredentials:')
-        self.stdout.write('  Super Admin: academic@learnly.io  / SuperAdmin@1234')
-        self.stdout.write('  Admin:       ermiyas@learnly.io   / Admin@1234')
-        self.stdout.write('  Teacher:     nabonsi@learnly.io   / Teacher@1234')
-        self.stdout.write('  Student:     keab@learnly.io      / Student@1234')
+            # Create sample quiz submissions and assignment submissions
+            for si, student in enumerate(students):
+                # Quiz submission
+                quiz_submission = QuizSubmission.objects.create(student=student, quiz=quiz)
+                for q in quiz.questions.all():
+                    choice = q.choices.first()
+                    StudentAnswer.objects.create(submission=quiz_submission, question=q, selected_choice=choice, is_correct=choice.is_correct, points_awarded=(q.points if choice.is_correct else 0))
+                quiz_submission.grade_submission()
 
-COURSES_DATA = [
-    {
-        'title': 'Complete Python Bootcamp',
-        'description': 'Learn Python from scratch to advanced. Covers OOP, file I/O, APIs, and more.',
-        'category': 'Programming', 'is_premium': False, 'price': 0,
-        'status': 'published', 'tags': 'python,beginner,programming',
-        'lessons': [
-            {'title': 'Introduction to Python',       'order': 1, 'duration_min': 15, 'status': 'published',
-             'description': 'Overview of Python and setting up your environment.',
-             'video_url': 'https://example.com/videos/py-intro'},
-            {'title': 'Variables and Data Types',     'order': 2, 'duration_min': 20, 'status': 'published',
-             'description': 'Understanding Python data types.',
-             'video_url': 'https://example.com/videos/py-vars'},
-            {'title': 'Control Flow',                 'order': 3, 'duration_min': 25, 'status': 'published',
-             'description': 'If statements, loops, and logic.',
-             'video_url': 'https://example.com/videos/py-flow'},
-            {'title': 'Functions and Modules',        'order': 4, 'duration_min': 30, 'status': 'published',
-             'description': 'Writing reusable code.',
-             'video_url': 'https://example.com/videos/py-funcs'},
-            {'title': 'Object-Oriented Programming',  'order': 5, 'duration_min': 40, 'status': 'published',
-             'description': 'Classes, inheritance, and polymorphism.',
-             'video_url': 'https://example.com/videos/py-oop'},
-        ],
-    },
-    {
-        'title': 'Machine Learning Fundamentals',
-        'description': 'Hands-on ML with scikit-learn, pandas, and real datasets.',
-        'category': 'Data Science', 'is_premium': True, 'price': 49.99,
-        'status': 'published', 'tags': 'ml,data-science,python',
-        'lessons': [
-            {'title': 'What is Machine Learning?',    'order': 1, 'duration_min': 20, 'status': 'published',
-             'description': 'Types of ML and real-world applications.',
-             'video_url': 'https://example.com/videos/ml-intro'},
-            {'title': 'Data Preprocessing',           'order': 2, 'duration_min': 35, 'status': 'published',
-             'description': 'Cleaning and preparing data with pandas.',
-             'video_url': 'https://example.com/videos/ml-prep'},
-            {'title': 'Linear Regression',            'order': 3, 'duration_min': 45, 'status': 'published',
-             'description': 'Building your first predictive model.',
-             'video_url': 'https://example.com/videos/ml-linreg'},
-            {'title': 'Classification Algorithms',    'order': 4, 'duration_min': 50, 'status': 'published',
-             'description': 'Decision trees, KNN, and SVM.',
-             'video_url': 'https://example.com/videos/ml-class'},
-        ],
-    },
-    {
-        'title': 'UX Design Principles',
-        'description': 'Master user research, wireframing, prototyping, and usability testing.',
-        'category': 'Design', 'is_premium': False, 'price': 0,
-        'status': 'published', 'tags': 'ux,design,figma',
-        'lessons': [
-            {'title': 'Introduction to UX',           'order': 1, 'duration_min': 18, 'status': 'published',
-             'description': 'What UX design is and why it matters.',
-             'video_url': 'https://example.com/videos/ux-intro'},
-            {'title': 'User Research Methods',        'order': 2, 'duration_min': 30, 'status': 'published',
-             'description': 'Interviews, surveys, and usability tests.',
-             'video_url': 'https://example.com/videos/ux-research'},
-            {'title': 'Wireframing with Figma',       'order': 3, 'duration_min': 40, 'status': 'published',
-             'description': 'Building low and high fidelity wireframes.',
-             'video_url': 'https://example.com/videos/ux-figma'},
-        ],
-    },
-    {
-        'title': 'Advanced Django REST APIs',
-        'description': 'Build production-grade APIs with Django, DRF, JWT, and PostgreSQL.',
-        'category': 'Programming', 'is_premium': True, 'price': 39.99,
-        'status': 'published', 'tags': 'django,api,backend,python',
-        'lessons': [
-            {'title': 'DRF ViewSets and Routers',     'order': 1, 'duration_min': 30, 'status': 'published',
-             'description': 'Efficient API design with ViewSets.',
-             'video_url': 'https://example.com/videos/drf-viewsets'},
-            {'title': 'JWT Authentication',           'order': 2, 'duration_min': 35, 'status': 'published',
-             'description': 'Securing APIs with SimpleJWT.',
-             'video_url': 'https://example.com/videos/drf-jwt'},
-            {'title': 'Permissions and Throttling',   'order': 3, 'duration_min': 25, 'status': 'published',
-             'description': 'Role-based access and rate limiting.',
-             'video_url': 'https://example.com/videos/drf-perms'},
-        ],
-    },
-]
+                # Assignment submission: grade some, leave some pending
+                asub, _ = AssignmentSubmission.objects.get_or_create(student=student, assignment=assignment, defaults={'submission_text': 'Here is my work.', 'status': AssignmentSubmission.Status.SUBMITTED})
+                if si % 2 == 0:
+                    asub.grade = 90
+                    asub.feedback = 'Well done.'
+                    asub.status = AssignmentSubmission.Status.GRADED
+                    asub.save()
 
+            # Attendance records for today
+            for student in students[:4]:
+                AttendanceRecord.objects.get_or_create(student=student, course_offering=offering, date=today, defaults={'status': AttendanceRecord.Status.PRESENT, 'marked_by': creator})
 
+            # Notifications
+            for student in students:
+                Notification.objects.get_or_create(recipient=student, title=f'New course: {course.title}', defaults={'notification_type': Notification.Type.COURSE_UPDATE, 'message': f'{course.title} is now available.'})
 
+        # Update CourseProgress for students
+        for student in students:
+            for course in created_courses:
+                total_lessons = course.lessons.count()
+                completed = Progress.objects.filter(student=student, lesson__course=course, completed=True).count()
+                percent = (completed / total_lessons * 100) if total_lessons else 0
+                cp, _ = CourseProgress.objects.get_or_create(student=student, course=course, defaults={'completed_lessons': completed, 'total_lessons': total_lessons, 'percent_complete': percent})
+                cp.completed_lessons = completed
+                cp.total_lessons = total_lessons
+                cp.percent_complete = percent
+                cp.save()
+
+        self.stdout.write(self.style.SUCCESS('Seeding complete.'))
+        self.stdout.write('Credentials:')
+        self.stdout.write(f" Admin: {ADMIN_CREDENTIALS['email']} / {ADMIN_CREDENTIALS['password']}")
+        self.stdout.write(' Teachers: alice.morgan@example.com, bob.taylor@example.com  (password: Teacher@1234)')
+        self.stdout.write(' Students: dan.smith@example.com, emma.jones@example.com, liam.brown@example.com, olivia.green@example.com, noah.white@example.com  (password: Student@1234)')
