@@ -374,3 +374,214 @@ class LessonDetailView(generics.RetrieveUpdateDestroyAPIView):
         lesson = self.get_object()
         lesson.delete()
         return Response({'success': True, 'message': 'Lesson deleted.'})
+
+
+# ---------------------------------------------------------------------------
+# Quizzes & Assignments API (ViewSets)
+# ---------------------------------------------------------------------------
+from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
+from users.permissions import IsTeacher, IsStudent, IsAdminOrTeacher
+from .models import Quiz, Question, Choice, QuizSubmission, StudentAnswer, Assignment, AssignmentSubmission
+from .serializers import (
+    QuizSerializer, QuestionSerializer, ChoiceSerializer, QuizSubmissionSerializer, StudentAnswerSerializer,
+    AssignmentSerializer, AssignmentSubmissionSerializer,
+)
+
+
+class QuizViewSet(viewsets.ModelViewSet):
+    queryset = Quiz.objects.all()
+    serializer_class = QuizSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Quiz.objects.select_related('course').prefetch_related('questions__choices')
+        if user.is_super_admin or user.is_admin_only:
+            return qs
+        if user.is_teacher:
+            return qs.filter(course__offerings__instructor=user).distinct()
+        # students see published quizzes only for enrolled courses
+        from enrollments.models import Enrollment
+        enrolled_course_ids = Enrollment.objects.filter(student=user, status__in=['active','completed']).values_list('course_offering__course_id', flat=True)
+        return qs.filter(is_published=True, course_id__in=enrolled_course_ids)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def submit(self, request, pk=None):
+        """POST /api/v1/quizzes/{id}/submit/ — student submits answers; auto-grade."""
+        user = request.user
+        if not getattr(user, 'is_student', False):
+            return Response({'success': False, 'message': 'Only students can submit quizzes.'}, status=403)
+
+        try:
+            quiz = self.get_object()
+        except Quiz.DoesNotExist:
+            return Response({'success': False, 'message': 'Quiz not found.'}, status=404)
+
+        answers = request.data.get('answers', [])
+        if not isinstance(answers, list) or len(answers) == 0:
+            return Response({'success': False, 'message': 'Answers must be a non-empty list.'}, status=400)
+
+        # create submission
+        submission = QuizSubmission.objects.create(student=user, quiz=quiz)
+        created_answers = []
+        for a in answers:
+            qid = a.get('question')
+            sel_choice = a.get('selected_choice')
+            text_answer = a.get('text_answer', '')
+            try:
+                question = Question.objects.get(pk=qid, quiz=quiz)
+            except Question.DoesNotExist:
+                continue
+
+            choice_obj = None
+            if sel_choice:
+                try:
+                    choice_obj = Choice.objects.get(pk=sel_choice, question=question)
+                except Choice.DoesNotExist:
+                    choice_obj = None
+
+            is_correct = False
+            points_awarded = 0
+            if question.question_type == Question.Type.MCQ and choice_obj:
+                is_correct = bool(choice_obj.is_correct)
+                points_awarded = float(question.points) if is_correct else 0
+            elif question.question_type == Question.Type.TEXT:
+                # For text answers, leave ungraded (teacher will grade) — points_awarded left null
+                is_correct = False
+                points_awarded = None
+
+            ans = StudentAnswer.objects.create(
+                submission=submission,
+                question=question,
+                selected_choice=choice_obj,
+                text_answer=text_answer,
+                is_correct=is_correct,
+                points_awarded=points_awarded,
+            )
+            created_answers.append(ans)
+
+        # Grade automatic parts
+        submission.grade_submission()
+
+        serializer = QuizSubmissionSerializer(submission, context={'request': request})
+        return Response({'success': True, 'submission': serializer.data})
+
+
+class AssignmentViewSet(viewsets.ModelViewSet):
+    queryset = Assignment.objects.all()
+    serializer_class = AssignmentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Assignment.objects.select_related('course').prefetch_related('submissions')
+        if user.is_super_admin or user.is_admin_only:
+            return qs
+        if user.is_teacher:
+            return qs.filter(course__offerings__instructor=user).distinct()
+        # students: assignments for their enrolled courses
+        from enrollments.models import Enrollment
+        enrolled_course_ids = Enrollment.objects.filter(student=user, status__in=['active','completed']).values_list('course_offering__course_id', flat=True)
+        return qs.filter(course_id__in=enrolled_course_ids)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def submit(self, request, pk=None):
+        """POST /api/v1/assignments/{id}/submit/ — student submits an assignment."""
+        user = request.user
+        if not getattr(user, 'is_student', False):
+            return Response({'success': False, 'message': 'Only students can submit assignments.'}, status=403)
+        try:
+            assignment = self.get_object()
+        except Assignment.DoesNotExist:
+            return Response({'success': False, 'message': 'Assignment not found.'}, status=404)
+
+        data = request.data.copy()
+        data['assignment'] = assignment.id
+        data['student'] = user.id
+        # set status to SUBMITTED
+        serializer = AssignmentSubmissionSerializer(data=data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        submission = serializer.save()
+        # update status
+        submission.status = AssignmentSubmission.Status.SUBMITTED
+        submission.save(update_fields=['status'])
+        return Response({'success': True, 'submission': AssignmentSubmissionSerializer(submission, context={'request': request}).data}, status=201)
+
+
+class AssignmentSubmissionViewSet(viewsets.ModelViewSet):
+    queryset = AssignmentSubmission.objects.all()
+    serializer_class = AssignmentSubmissionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = AssignmentSubmission.objects.select_related('student', 'assignment__course')
+        if user.is_super_admin or user.is_admin_only:
+            return qs
+        if user.is_teacher:
+            return qs.filter(assignment__course__offerings__instructor=user).distinct()
+        # students see only their submissions
+        return qs.filter(student=user)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def grade(self, request, pk=None):
+        """POST /api/v1/submissions/{id}/grade/ — teacher grades a student's submission."""
+        user = request.user
+        if not getattr(user, 'is_teacher', False) and not getattr(user, 'is_admin', False):
+            return Response({'success': False, 'message': 'Only teachers or admins can grade submissions.'}, status=403)
+
+        submission = self.get_object()
+        grade_val = request.data.get('grade')
+        feedback = request.data.get('feedback', '')
+
+        if grade_val is None:
+            return Response({'success': False, 'message': 'Grade value is required.'}, status=400)
+
+        try:
+            submission.grade = grade_val
+            submission.feedback = feedback
+            submission.status = AssignmentSubmission.Status.GRADED
+            submission.save(update_fields=['grade', 'feedback', 'status'])
+            return Response({'success': True, 'submission': AssignmentSubmissionSerializer(submission, context={'request': request}).data})
+        except Exception as e:
+            return Response({'success': False, 'message': str(e)}, status=500)
+
+
+class QuizSubmissionViewSet(viewsets.ReadOnlyModelViewSet):
+    """Teachers/admins can view all submissions; students can view only their own."""
+    queryset = QuizSubmission.objects.all().select_related('student', 'quiz__course').prefetch_related('answers__question')
+    serializer_class = QuizSubmissionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = QuizSubmission.objects.select_related('student', 'quiz__course').prefetch_related('answers__question')
+        if user.is_super_admin or user.is_admin_only:
+            return qs
+        if user.is_teacher:
+            return qs.filter(quiz__course__offerings__instructor=user).distinct()
+        # student only their own
+        return qs.filter(student=user)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
+    def rescore(self, request, pk=None):
+        """Optional: teacher may rescore a submission after manual grading of text answers."""
+        user = request.user
+        if not getattr(user, 'is_teacher', False) and not getattr(user, 'is_admin', False):
+            return Response({'success': False, 'message': 'Only teachers or admins can rescore submissions.'}, status=403)
+
+        submission = self.get_object()
+        # allow teacher to update answer points via payload answers: [{id: answer_id, points_awarded: x}, ...]
+        answers_payload = request.data.get('answers', [])
+        for a in answers_payload:
+            try:
+                ans = submission.answers.get(pk=a.get('id'))
+                if 'points_awarded' in a:
+                    ans.points_awarded = a.get('points_awarded')
+                    ans.is_correct = bool(a.get('points_awarded'))
+                    ans.save(update_fields=['points_awarded', 'is_correct'])
+            except Exception:
+                continue
+        submission.grade_submission()
+        return Response({'success': True, 'submission': QuizSubmissionSerializer(submission, context={'request': request}).data})
