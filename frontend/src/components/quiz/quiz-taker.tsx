@@ -44,7 +44,7 @@ export function QuizTaker({ quiz, onFinish, onCancel }: QuizTakerProps) {
   useEffect(() => { answersRef.current = answers; }, [answers]);
 
   // ── Build and dispatch the attempt ──────────────────────────────────────
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     if (submittedRef.current) return; // prevent double-fire
     submittedRef.current = true;
     setSubmitted(true);
@@ -56,18 +56,23 @@ export function QuizTaker({ quiz, onFinish, onCancel }: QuizTakerProps) {
     ).length;
     const score = Math.round((correct / quiz.questions.length) * 100);
 
-    const attempt = submitAttempt({
-      quiz_id:            quiz.id,
-      student_id:         currentUser?.id?.toString() ?? "u3",
-      student_name:       currentUser?.full_name ?? "Student",
-      answers:            latest,
+    const submission = await submitAttempt(Number(quiz.id), Object.entries(latest).map(([question_id, answer]) => ({ question_id, answer })) );
+    // submission may be null on failure — build a local fallback
+    const attempt = submission ?? {
+      id: `att-${Date.now()}`,
+      quiz_id: String(quiz.id),
+      student_id: currentUser?.id?.toString() ?? "u3",
+      student_name: currentUser?.full_name ?? "Student",
+      answers: latest,
       score,
-      correct_count:      correct,
-      total_questions:    quiz.questions.length,
+      correct_count: correct,
+      total_questions: quiz.questions.length,
       time_taken_seconds: timeTaken,
-      passed:             score >= quiz.passing_score,
-    });
-    onFinish(attempt);
+      passed: score >= quiz.passing_score,
+      submitted_at: new Date().toISOString(),
+    };
+
+    onFinish(attempt as QuizAttempt);
   }, [quiz, submitAttempt, currentUser, onFinish]);
 
   // ── Countdown timer — uses handleSubmit ref, no stale closure ───────────
