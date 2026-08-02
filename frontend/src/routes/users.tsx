@@ -78,6 +78,35 @@ function UsersPage() {
     setDel(null);
   }
 
+  async function handleToggleActive(target: any) {
+    if (!target) return;
+    try {
+      const updated = await usersApi.update(target.id, { is_active: !target.is_active });
+      toast.success(`${updated?.full_name ?? target.full_name} ${updated?.is_active ? 'enabled' : 'disabled'}`);
+      qc.invalidateQueries({ queryKey: QK.users() });
+    } catch (e) {
+      toast.error('Failed to update user status.');
+    }
+  }
+
+  async function handleResetAccess(target: any) {
+    if (!target) return;
+    try {
+      // Best-effort: try a dedicated reset endpoint, fallback to enabling account
+      const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000';
+      try {
+        await fetch(`${base}/api/v1/users/${target.id}/reset-access/`, { method: 'POST', credentials: 'include' });
+        toast.success('Reset access requested.');
+      } catch {
+        await usersApi.update(target.id, { is_active: true });
+        toast.success('Access reset by enabling account.');
+      }
+      qc.invalidateQueries({ queryKey: QK.users() });
+    } catch {
+      toast.error('Reset access failed.');
+    }
+  }
+
   return (
     <AppLayout>
       <div className="flex items-center justify-between mb-5">
@@ -169,14 +198,17 @@ function UsersPage() {
                         </span>
                       </td>
                       <td className="px-5 py-3 text-right">
-                        <Button
-                          size="icon" variant="ghost"
-                          className="h-8 w-8 hover:bg-red-100 hover:text-red-600"
-                          onClick={() => setDel(u)}
-                          title="Delete"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                        <div className="flex items-center justify-end gap-2">
+                          <Button size="icon" variant="ghost" title={u.is_active ? "Disable account" : "Enable account"} onClick={() => handleToggleActive(u)} className="h-8 w-8">
+                            {u.is_active ? <ShieldOff className="h-3.5 w-3.5 text-red-600" /> : <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />}
+                          </Button>
+                          <Button size="icon" variant="ghost" title="Reset access" onClick={() => handleResetAccess(u)} className="h-8 w-8">
+                            <UserCog className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="h-8 w-8 hover:bg-red-100 hover:text-red-600" onClick={() => setDel(u)} title="Delete">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   );

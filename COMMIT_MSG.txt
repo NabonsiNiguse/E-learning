@@ -1,0 +1,3 @@
+﻿Admin dashboard: remove mock stats, add notifications integration and partial loading; Users UI: enable/disable and reset-access UI; API: fix malformed Authorization header; Backend: add reset-access endpoint and extend admin dashboard totals (assignments/quizzes/attendance/appeals/notifications)
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

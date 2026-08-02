@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Learnly API client — production-hardened
  *
  * Security model
@@ -173,7 +173,7 @@ export async function apiFetch<T>(
   if (bearerToken) {
     headers["Authorization"] = "Bearer " + bearerToken;
   }
-    headers["Authorization"] = `Bearer ${bearerToken}`;
+    
 
   const controller = new AbortController();
   const timeoutId  = setTimeout(() => controller.abort(), 10_000);
@@ -599,3 +599,4 @@ export const quizzesApi = {
     rescore: (id: number, payload: any) => apiFetch<any>(`/courses/quiz-submissions/${id}/rescore/`, { method: "POST", body: JSON.stringify(payload) }),
   },
 };
+

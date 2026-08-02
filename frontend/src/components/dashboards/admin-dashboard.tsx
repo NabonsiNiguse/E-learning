@@ -3,12 +3,11 @@ import { Users, GraduationCap, BookOpen, TrendingUp, UserCheck, ArrowUpRight, Ac
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { recentActivity } from "@/lib/mock-data";
 import { useAttendance } from "@/context/attendance-context";
 import { WeeklyActivityChart, EnrollmentBarChart, AttendanceDonutChart } from "./dashboard-charts";
-import { StatCard, PremiumCourseCard, VideoCard, mockVideos } from "./dashboard-cards";
+import { StatCard, PremiumCourseCard } from "./dashboard-cards";
 import { useApp } from "@/context/app-context";
-import { useAdminDashboard, useDashboardStats } from "@/lib/use-api";
+import { useAdminDashboard, useDashboardStats, useNotifications } from "@/lib/use-api";
 import { cn } from "@/lib/utils";
 
 export function AdminDashboard() {
@@ -16,7 +15,9 @@ export function AdminDashboard() {
   const { records } = useAttendance();
   const navigate = useNavigate();
   const legacy = useAdminDashboard();
-  const { data: statsRes, isLoading: statsLoading } = useDashboardStats();
+  const { data: statsRes, isLoading: statsLoading, isError: statsError } = useDashboardStats();
+  const { data: notifsRes, isLoading: notifsLoading, isError: notifsError } = useNotifications();
+  const notifications = (notifsRes as any)?.results ?? [];
 
   if (legacy.isLoading && statsLoading) {
     return (
@@ -146,25 +147,24 @@ export function AdminDashboard() {
             <Button variant="ghost" size="sm" className="text-xs h-7 text-primary" asChild><Link to="/users">View all</Link></Button>
           </div>
           <div className="space-y-0.5">
-            {recentActivity.map((a) => {
-              const dest = a.action.toLowerCase().includes("enroll") ? "/students"
-                : a.action.toLowerCase().includes("course") || a.action.toLowerCase().includes("lesson") ? "/courses"
-                : a.action.toLowerCase().includes("submit") ? "/assignments" : "/users";
-              return (
-                <button key={a.id} onClick={() => navigate({ to: dest as any })}
+            {notifications.length === 0 && !notifsLoading && (
+              <div className="text-sm text-muted-foreground py-6 text-center">No recent activity.</div>
+            )}
+            {notifsLoading ? (
+              <div className="flex items-center justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>
+            ) : (
+              notifications.slice(0,6).map((n: any) => (
+                <button key={n.id} onClick={() => navigate({ to: "/notifications" as any })}
                   className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-secondary/50 transition-colors text-left group">
-                  <div className="h-8 w-8 rounded-full gradient-primary text-white flex items-center justify-center text-[10px] font-bold shrink-0">
-                    {a.user.split(" ").map((n) => n[0]).join("")}
-                  </div>
+                  <div className="h-8 w-8 rounded-full gradient-primary text-white flex items-center justify-center text-[10px] font-bold shrink-0">{String(n.title || "N").slice(0,2)}</div>
                   <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium group-hover:text-primary transition-colors">{a.user}</span>
-                    <span className="text-sm text-muted-foreground"> {a.action} </span>
-                    <span className="text-sm font-medium text-primary truncate">{a.target}</span>
+                    <span className="text-sm font-medium group-hover:text-primary transition-colors">{n.title}</span>
+                    <span className="text-sm text-muted-foreground block truncate">{n.message}</span>
                   </div>
-                  <span className="text-[11px] text-muted-foreground shrink-0">{a.time}</span>
+                  <span className="text-[11px] text-muted-foreground shrink-0">{n.created_at ?? ""}</span>
                 </button>
-              );
-            })}
+              ))
+            )}
           </div>
         </Card>
       </div>
@@ -181,11 +181,11 @@ export function AdminDashboard() {
 
       <div>
         <div className="flex items-center justify-between mb-4">
-          <div><h3 className="font-display font-bold text-lg">Featured Videos</h3><p className="text-sm text-muted-foreground">Popular video content across all courses</p></div>
-          <Button variant="outline" size="sm" asChild className="text-xs hover:border-primary/40"><Link to="/videos">View all</Link></Button>
+          <div><h3 className="font-display font-bold text-lg">System Modules</h3><p className="text-sm text-muted-foreground">Enable, disable, and manage system modules</p></div>
+          <Button variant="outline" size="sm" asChild className="text-xs hover:border-primary/40"><Link to="/system/modules">Manage</Link></Button>
         </div>
         <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
-          {mockVideos.map((v, i) => <VideoCard key={i} {...v} />)}
+          <Card className="p-4 border-border/60 text-sm">Modules are managed server-side. Visit the module manager to change permissions and enable overrides. Admins with proper backend authorization can override records where allowed.</Card>
         </div>
       </div>
     </div>

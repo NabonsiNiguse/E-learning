@@ -295,3 +295,26 @@ class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
         user.is_active = False
         user.save()
         return Response({'success': True, 'message': 'User deactivated.'})
+
+
+class ResetAccessView(APIView):
+    """POST /api/v1/users/<pk>/reset-access/ — best-effort reset of a user's access.
+
+    This is intentionally conservative: it enables the account so the user can sign in
+    and returns a success message. If the project requires generating temporary
+    passwords or emailing reset links, extend this view to create tokens and send
+    notifications using the site's mailing facilities.
+    """
+    permission_classes = [IsAdmin]
+
+    def post(self, request, pk):
+        try:
+            user = User.objects.get(pk=pk)
+        except User.DoesNotExist:
+            return Response({'detail': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Best-effort reset: enable account. Do not change password automatically here.
+        user.is_active = True
+        user.save()
+
+        return Response({'success': True, 'message': 'User access reset (account enabled).'}, status=status.HTTP_200_OK)

@@ -14,6 +14,8 @@ from payments.models import Payment
 from users.permissions import IsAdmin, IsTeacher, IsStudent
 from attendance.models import AttendanceRecord
 from courses.models import Assignment, AssignmentSubmission, Quiz, QuizSubmission
+from results.models import GradeAppeal
+from notifications.models import Notification
 
 
 class AdminDashboardView(APIView):
@@ -57,6 +59,13 @@ class AdminDashboardView(APIView):
             .values('id', 'title', 'enroll_count')
         )
 
+        # Additional counts requested by the front-end
+        assignments_count = Assignment.objects.count()
+        quizzes_count = Quiz.objects.count()
+        attendance_count = AttendanceRecord.objects.count()
+        appeals_count = GradeAppeal.objects.count()
+        notifications_count = Notification.objects.count()
+
         return Response({
             'success': True,
             'data': {
@@ -69,6 +78,11 @@ class AdminDashboardView(APIView):
                     'enrollments': enrollment_stats['total'],
                     'active_enrollments': enrollment_stats['active'],
                     'successful_payments': payment_stats['total_revenue'],
+                    'assignments': assignments_count,
+                    'quizzes': quizzes_count,
+                    'attendance_records': attendance_count,
+                    'appeals': appeals_count,
+                    'notifications': notifications_count,
                 },
                 'last_30_days': {
                     'new_users': user_stats['new_users'],
